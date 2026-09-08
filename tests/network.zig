@@ -1,140 +1,134 @@
 const std = @import("std");
-const testing = std.testing;
-
 const zgc = @import("zgc");
-const Activation = zgc.Extensions.Activation;
-const Mat = zgc.Extensions.Matrix;
-const NN = zgc.Extensions.NN;
-const expect_mat_approx_equal = @import("test_helpers.zig").expect_mat_approx_equal;
 
-const linear_def: []const struct { usize, Activation } = &.{
-    .{ 2, .none },
-    .{ 2, .none },
+const Sources = enum(usize) { input, w1, b1, w2, b2 };
+const Definition = zgc.DefinitionBackend(Sources, .{
+    .max_rank = 2,
+    .max_nodes = 6,
+    .max_tensors = 11,
+    .max_input_refs = 10,
+    .max_outputs = 1,
+});
+const Dense = zgc.nn.Dense(Sources);
+const Classifier = zgc.nn.Sequential(&[_]Dense{
+    .{
+        .weights = .w1,
+        .bias = .b1,
+        .output_size = 2,
+        .activation = .relu,
+    },
+    .{
+        .weights = .w2,
+        .bias = .b2,
+        .output_size = 2,
+        .activation = .softmax,
+    },
+});
+
+const definition = blk: {
+    var builder = Definition.init();
+    const input = builder.input(.input, .f32, &.{ 2, 2 });
+    builder.output(Classifier.apply(&builder, input));
+    break :blk builder.finish();
 };
+const Model = definition.model();
 
-const softmax_def: []const struct { usize, Activation } = &.{
-    .{ 2, .none },
-    .{ 2, .softmax },
-};
+test "dense layers build a sequential core graph" {
+    const graph = Model.build_graph;
 
-fn set_known_parameters(nn: anytype) void {
-    nn.layers[1].weights.load(.{
-        .{ 2, -1 },
-        .{ 0.5, 3 },
-    });
-    nn.layers[1].bias.load(.{
-        .{1},
-        .{-2},
-    });
+    try std.testing.expectEqual(@as(usize, 6), graph.node_ct);
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 2, 2 },
+        graph.tensors[graph.outputs[0].?].?.shape.slice(),
+    );
+    try std.testing.expectEqual(@as(usize, 2), Classifier.layer_count);
+    try std.testing.expectEqual(zgc.nn.Activation.relu, Classifier.layer_definitions[0].activation);
+    try std.testing.expectEqual(zgc.nn.Activation.softmax, Classifier.layer_definitions[1].activation);
 }
 
-test "single-sample inference matches known linear output" {
-    var nn = NN(linear_def, 1).new();
-    set_known_parameters(&nn);
+test "dense sequential model executes through core kernels" {
+    var model = Model.init();
+    const input = [_]f32{ 4, 5, -2, 1 };
+    const identity = [_]f32{ 1, 0, 0, 1 };
+    const first_bias = [_]f32{ 1, -2 };
+    const zero_bias = [_]f32{ 0, 0 };
 
-    var input = Mat(1, 2).create(0);
-    input.load(.{
-        .{ 4, 5 },
-    });
-    var expected = Mat(2, 1).create(0);
-    expected.load(.{
-        .{4},
-        .{15},
-    });
+    try model.copyInput(.input, &input);
+    try model.copySource(.w1, &identity);
+    try model.copySource(.b1, &first_bias);
+    try model.copySource(.w2, &identity);
+    try model.copySource(.b2, &zero_bias);
+    model.run();
 
-    const actual = nn.forward(input);
-
-    try testing.expectEqualDeep(expected.data, actual.data);
+    const output = model.outputView(0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.880797), output.get(.{ 0, 0 }), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.11920292), output.get(.{ 0, 1 }), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output.get(.{ 1, 0 }), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output.get(.{ 1, 1 }), 1e-6);
 }
 
-test "multi-sample inference matches known linear output" {
-    var nn = NN(linear_def, 3).new();
-    set_known_parameters(&nn);
-
-    var input = Mat(3, 2).create(0);
-    input.load(.{
-        .{ 4, 5 },
-        .{ -2, 1 },
-        .{ 0, -3 },
+test "dense output-input weights create an aliasing transpose" {
+    const LayoutSources = enum(usize) { input, weights, bias };
+    const LayoutDefinition = zgc.DefinitionBackend(LayoutSources, .{
+        .max_rank = 2,
+        .max_nodes = 3,
+        .max_tensors = 6,
+        .max_input_refs = 5,
+        .max_outputs = 1,
     });
-    var expected = Mat(2, 3).create(0);
-    expected.load(.{
-        .{ 4, -4, 4 },
-        .{ 15, 0, -11 },
-    });
-
-    const actual = nn.forward(input);
-
-    try testing.expectEqualDeep(expected.data, actual.data);
-}
-
-test "forward and forward_ produce the same output" {
-    var nn = NN(linear_def, 3).new();
-    set_known_parameters(&nn);
-
-    var input = Mat(3, 2).create(0);
-    input.load(.{
-        .{ 4, 5 },
-        .{ -2, 1 },
-        .{ 0, -3 },
-    });
-
-    const returning_output = nn.forward(input);
-    var in_place_output = Mat(2, 3).create(std.math.nan(f32));
-    nn.forward_(input, &in_place_output);
-
-    try testing.expectEqualDeep(returning_output.data, in_place_output.data);
-}
-
-test "network applies batched softmax per sample" {
-    var nn = NN(softmax_def, 3).new();
-    set_known_parameters(&nn);
-
-    var input = Mat(3, 2).create(0);
-    input.load(.{
-        .{ 4, 5 },
-        .{ -2, 1 },
-        .{ 0, -3 },
-    });
-
-    const actual = nn.forward(input);
-    const sums: [3]f32 = actual.sum_cwise();
-
-    for (sums) |sum| {
-        try testing.expectApproxEqAbs(@as(f32, 1), sum, 1e-6);
-    }
-    for (0..actual.rows()) |row| {
-        for (0..actual.cols()) |col| {
-            try testing.expect(std.math.isFinite(actual.get(row, col)));
-        }
-    }
-}
-
-test "random initialization is deterministic by seed" {
-    const def: []const struct { usize, Activation } = &.{
-        .{ 3, .none },
-        .{ 4, .relu },
-        .{ 2, .softmax },
+    const OutputMajorDense = zgc.nn.Dense(LayoutSources);
+    const layout_definition = comptime blk: {
+        var builder = LayoutDefinition.init();
+        const input = builder.input(.input, .f32, &.{ 1, 3 });
+        const layer: OutputMajorDense = .{
+            .weights = .weights,
+            .bias = .bias,
+            .output_size = 2,
+            .weight_layout = .output_input,
+        };
+        builder.output(layer.apply(&builder, input));
+        break :blk builder.finish();
     };
-    const Net = NN(def, 2);
+    const graph = layout_definition.model().build_graph;
 
-    var first = Net.new();
-    first.random_init(103);
-    var second = Net.new();
-    second.random_init(103);
-    var different = Net.new();
-    different.random_init(104);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, graph.tensors[1].?.shape.slice());
+    try std.testing.expectEqualSlices(usize, &.{ 3, 2 }, graph.tensors[2].?.shape.slice());
+    try std.testing.expectEqual(graph.tensors[1].?.storage_tensor, graph.tensors[2].?.storage_tensor);
+}
 
-    try testing.expectEqualDeep(first.layers[1].weights.data, second.layers[1].weights.data);
-    try testing.expectEqualDeep(first.layers[1].bias.data, second.layers[1].bias.data);
-    try testing.expect(!std.meta.eql(first.layers[1].weights.data, different.layers[1].weights.data));
+test "image helpers declare channel-aware core inputs" {
+    try std.testing.expectEqual(
+        [4]usize{ 2, 28, 28, 3 },
+        (zgc.img.Dimensions{ .batch = 2, .height = 28, .width = 28, .channels = 3 }).shape(),
+    );
+    try std.testing.expectEqual(
+        [4]usize{ 2, 3, 28, 28 },
+        (zgc.img.Dimensions{
+            .batch = 2,
+            .height = 28,
+            .width = 28,
+            .channels = 3,
+            .layout = .channels_first,
+        }).shape(),
+    );
 
-    var input = Mat(2, 3).create(0);
-    input.load(.{
-        .{ 1, 2, 3 },
-        .{ 4, 5, 6 },
+    const ImageSources = enum(usize) { image };
+    const ImageDefinition = zgc.DefinitionBackend(ImageSources, .{
+        .max_rank = 4,
+        .max_outputs = 1,
     });
-    const first_output = first.forward(input);
-    const second_output = second.forward(input);
-    try expect_mat_approx_equal(first_output, second_output, 0);
+    const image_definition = comptime blk: {
+        var builder = ImageDefinition.init();
+        const image = zgc.img.input(
+            &builder,
+            .image,
+            .f32,
+            .{ .batch = 2, .height = 28, .width = 28, .channels = 3 },
+        );
+        builder.output(image);
+        break :blk builder.finish();
+    };
+    const graph = image_definition.model().build_graph;
+    try std.testing.expectEqualSlices(usize, &.{ 2, 28, 28, 3 }, graph.tensors[0].?.shape.slice());
 }

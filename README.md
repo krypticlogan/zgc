@@ -21,6 +21,8 @@ The project targets Zig 0.16.0.
 - `f32`, `f16`, and `i8` tensor metadata and elementwise kernels where valid.
 - ReLU, exp, add, sub, matmul, sum, softmax, and transpose operations.
 - SIMD fast paths for contiguous kernels and generic strided traversal.
+- Core-backed dense and sequential graph layers through `zgc.nn`.
+- Rank-4 image input conventions through `zgc.img`.
 - Operation and generated-model benchmarks, plus a standalone sandbox package.
 
 See [development state](docs/development-state.md) for precise limitations and
@@ -71,6 +73,29 @@ Definition limits have defaults and may be overridden at compile time. These
 are front-end bounds, not final allocation sizes. The counting pass derives the
 exact node, tensor, reference, output, source, and rank capacities before graph
 construction and memory planning.
+
+## Neural-network layers
+
+`zgc.nn` composes higher-level layers through `DefinitionBackend`; it does not
+provide a separate tensor runtime.
+
+```zig
+const Dense = zgc.nn.Dense(Sources);
+const Classifier = zgc.nn.Sequential(&[_]Dense{
+    .{ .weights = .w1, .bias = .b1, .output_size = 16, .activation = .relu },
+    .{ .weights = .w2, .bias = .b2, .output_size = 10, .activation = .softmax },
+});
+
+const input = builder.input(.input, .f32, &.{ batch_size, input_size });
+builder.output(Classifier.apply(builder, input));
+```
+
+Dense weights use logical `[input, output]` storage by default. Set
+`.weight_layout = .output_input` for sources stored as `[output, input]`; the
+layer adds an aliasing transpose before matmul.
+
+`zgc.img.Dimensions` defines channel-first or channel-last rank-4 shapes, and
+`zgc.img.input` declares a core graph input with that convention.
 
 ## Source storage
 
@@ -153,7 +178,7 @@ and recorded results.
 | `src/zgc/` | Graph, tensor/view, operation, storage, and executable-model machinery |
 | `src/cli/` | Model-specific command-line entry points |
 | `src/artifact/` | Generated-model artifact entry points |
-| `src/extensions/` | Standalone matrix and feed-forward network utilities exposed through `zgc.Extensions` |
+| `src/extensions/` | Core-backed domain abstractions exported as `zgc.nn` and `zgc.img` |
 | `tests/` | Compile-time graph, runtime model, validation, view, and kernel coverage |
 | `benchmarks/` | Operation and generated-model benchmark harness, with recorded results |
 | `sandbox/` | Standalone model definitions, interactive inference, inspection, and artifact analysis |

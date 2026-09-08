@@ -99,6 +99,10 @@ expected of a consumer:
 4. Initialize the generated model, bind a runtime input, run, and retrieve an
    output view.
 
+The digit classifier composes its three dense stages with `zgc.nn.Dense` and
+`zgc.nn.Sequential`. Its output-major parameter files are selected through each
+layer's `.weight_layout = .output_input` setting.
+
 ## Benchmarks
 
 Run the benchmark suite from the repository root:

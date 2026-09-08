@@ -1,124 +1,100 @@
-const std = @import("std");
-const print = std.debug.print;
+pub const Activation = enum {
+    none,
+    relu,
+    softmax,
 
-const Activation = @import("activations.zig").Activation;
-const Mat = @import("matrix.zig").Mat;
-const Layer = @import("layer.zig").Layer;
-const layer_role = @import("layer.zig").Role;
-const network_validation = @import("network_validation.zig");
-
-/// Generates a new network with the shape specified
-/// - The shape should be of a array type
-/// - The length of the tuple denotes the depth (number of layers) of the network
-/// - Each entry of the tuple denotes how many neurons per layer
-pub fn NN(comptime def: []const struct { usize, Activation }, comptime batch_size: usize) type {
-    comptime network_validation.assertValid(def, batch_size);
-    @setEvalBranchQuota(2_000_000_000);
-    const depth = def.len;
-    comptime var layers: [depth]type = undefined;
-    // Create nodes and weights
-    var parent_len: usize = 0;
-    inline for (def, 0..) |layer_def, layer| {
-        const nodes_len = layer_def[0];
-        if (layer > 0) parent_len = def[layer - 1][0];
-
-        const kind: layer_role = blk: {
-            if (layer == 0) break :blk .input;
-            if (layer + 1 != depth) break :blk .hidden;
-            break :blk .output;
+    pub fn apply(
+        comptime activation: Activation,
+        builder: anytype,
+        comptime value: @TypeOf(builder.*).TensorValue,
+    ) @TypeOf(builder.*).TensorValue {
+        return switch (activation) {
+            .none => value,
+            .relu => builder.relu(value),
+            .softmax => builder.softmax(value, value.shape.rank - 1),
         };
-
-        layers[layer] = Layer(kind, layer_def[1], nodes_len, parent_len, batch_size);
     }
-    const LayersTuple = std.meta.Tuple(&layers);
+};
+
+pub const WeightLayout = enum {
+    /// Logical and stored shape `[input, output]`.
+    input_output,
+    /// Stored shape `[output, input]`, exposed to matmul through a transpose.
+    output_input,
+};
+
+/// Configuration for a fully connected graph layer. Applying the layer adds
+/// its parameter sources and computation to a `DefinitionBackend`.
+pub fn Dense(comptime SourceKey: type) type {
+    return struct {
+        const Self = @This();
+
+        weights: SourceKey,
+        bias: SourceKey,
+        output_size: usize,
+        activation: Activation = .none,
+        weight_layout: WeightLayout = .input_output,
+
+        pub fn apply(
+            comptime layer: Self,
+            builder: anytype,
+            comptime input: @TypeOf(builder.*).TensorValue,
+        ) @TypeOf(builder.*).TensorValue {
+            if (input.shape.rank != 2) {
+                @compileError("zgc.nn.Dense requires a rank-2 [batch, features] input");
+            }
+            if (layer.output_size == 0) {
+                @compileError("zgc.nn.Dense output_size must be greater than zero");
+            }
+            if (input.dtype != .f32) {
+                @compileError("zgc.nn.Dense currently supports f32 tensors");
+            }
+
+            const input_size = input.shape.at(1);
+            const stored_shape = switch (layer.weight_layout) {
+                .input_output => &.{ input_size, layer.output_size },
+                .output_input => &.{ layer.output_size, input_size },
+            };
+            const stored_weights = builder.parameter(
+                layer.weights,
+                input.dtype,
+                stored_shape,
+            );
+            const weights = switch (layer.weight_layout) {
+                .input_output => stored_weights,
+                .output_input => builder.transpose(stored_weights, 0, 1),
+            };
+            const bias = builder.parameter(
+                layer.bias,
+                input.dtype,
+                &.{layer.output_size},
+            );
+            const affine = builder.add(builder.matmul(input, weights), bias);
+            return layer.activation.apply(builder, affine);
+        }
+    };
+}
+
+/// Composes graph-layer values from left to right. Every layer must expose an
+/// `apply(builder, value)` function returning the builder's tensor value type.
+pub fn Sequential(comptime layers: anytype) type {
+    if (layers.len == 0) {
+        @compileError("zgc.nn.Sequential requires at least one layer");
+    }
 
     return struct {
-        const This = @This();
-        layers: LayersTuple = undefined,
-        num_nodes: usize = undefined,
+        pub const layer_definitions = layers;
+        pub const layer_count = layers.len;
 
-        /// Build a new predefined NN with the definition provided
-        pub fn new() This {
-            @setEvalBranchQuota(2_000_000_000); // large eval quota here due to high number of branches when building at comptime
-            const self: This = comptime blk: {
-                var tmp: This = undefined;
-                tmp.num_nodes = 0;
-
-                for (0.., def) |layer, layer_def| {
-                    tmp.num_nodes += layer_def[0];
-                    tmp.layers[layer].init();
-                }
-                break :blk tmp;
-            };
-            return self;
-        }
-
-        pub fn random_init(self: *This, seed: usize) void {
-            var prng = std.Random.Xoshiro256.init(seed);
-            inline for (1..def.len) |layer| {
-                self.layers[layer].random_fill_wb(&prng);
+        pub fn apply(
+            builder: anytype,
+            comptime input: @TypeOf(builder.*).TensorValue,
+        ) @TypeOf(builder.*).TensorValue {
+            var value = input;
+            inline for (layers) |layer| {
+                value = layer.apply(builder, value);
             }
-        }
-
-        /// Pass the directory to your pretrained weights and biases and import them to the model here
-        /// - Files should be labeled as "w1.bin, b1.bin, w2.bin, ... and so on"
-        /// Weights and biases begin at 1 because the 'zeroth' layer is the input layer and does not possess weights or biases
-        pub fn load_from_embeds() This {
-            const embeds = @import("embed_params");
-
-            var self: This = new();
-            for (1..def.len) |i| {
-                const w = std.mem.bytesAsSlice(f32, embeds.weights[i - 1]);
-                const b = std.mem.bytesAsSlice(f32, embeds.biases[i - 1]);
-                // TODO: downcast to f16 for storage
-                self.layer_from_bin(i, w, b);
-            }
-            return self;
-        }
-
-        fn layer_from_bin(self: *This, layer: usize, w_bin: []align(1) const f32, b_bin: []align(1) const f32) void {
-            var weights = &self.layers[layer].weights;
-            var bias = &self.layers[layer].bias;
-            if (w_bin.len != weights.rows() * weights.cols()) @compileError("Provided weights do not match the expected shape");
-            if (b_bin.len != bias.rows() * bias.cols()) @compileError("Provided biases do not match the expected shape");
-            for (0..weights.rows()) |i| {
-                const offset = i * weights.cols();
-                weights.data[i] = w_bin[offset .. offset + weights.cols()].*;
-            }
-            for (0..bias.rows()) |i| {
-                const offset = i * bias.cols();
-                bias.data[i] = b_bin[offset .. offset + bias.cols()].*;
-            }
-        }
-
-        pub fn show(self: *@This()) void {
-            inline for (0.., self.layers) |i, layer| {
-                print("Layer {d} | ", .{i});
-                print("Nodes: {any}\n", .{layer.a.rows()});
-                print("Layer {d} has {d} nodes and {d} connections\n", .{ i, layer.a.rows(), layer.weights.cols() * layer.a.rows() });
-                print("\n", .{});
-            }
-        }
-
-        // todo: forward into
-        pub fn forward(self: *@This(), input: Mat(batch_size, def[0][0])) Mat(def[depth - 1][0], batch_size) {
-            self.layers[0].a = input.t();
-            inline for (1..depth) |i| {
-                var layer = &self.layers[i];
-                const prev_out = self.layers[i - 1].a;
-                layer.forward(&prev_out);
-            }
-            return self.layers[depth - 1].a;
-        }
-
-        pub fn forward_(self: *@This(), input: Mat(batch_size, def[0][0]), out: *Mat(def[depth - 1][0], batch_size)) void {
-            self.layers[0].a = input.t();
-            inline for (1..depth) |i| {
-                var layer = &self.layers[i];
-                const prev_out = self.layers[i - 1].a;
-                layer.forward(&prev_out);
-            }
-            out.* = self.layers[depth - 1].a;
+            return value;
         }
     };
 }

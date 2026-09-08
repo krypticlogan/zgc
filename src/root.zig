@@ -11,4 +11,5 @@ pub const Matmul = @import("zgc/matmul.zig");
 pub const Source = @import("zgc/source.zig");
 pub const Storage = @import("zgc/storage.zig");
 pub const Inspect = @import("zgc/inspect.zig");
-pub const Extensions = @import("extensions/ext.zig");
+pub const nn = @import("extensions/nn.zig");
+pub const img = @import("extensions/img.zig");

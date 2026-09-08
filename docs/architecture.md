@@ -45,6 +45,11 @@ be an enum, giving every input, parameter, or constant a stable compile-time
 index. Its operation methods consume and return one concrete tensor-value type
 whose metadata contains an ID, dtype, and bounded shape.
 
+Internal namespaces such as `zgc.nn` and `zgc.img` build on this same front end. i.e. Neural
+network layers expand into core sources and operations, while image helpers
+declare core inputs with explicit rank-4 layout conventions. They do not own a
+separate runtime or storage representation.
+
 The definition records:
 
 - source tensors and their source kinds;

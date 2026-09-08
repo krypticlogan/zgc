@@ -13,7 +13,7 @@ const Sources = enum(usize) {
     b4,
 };
 
-const Activation = enum { relu, softmax };
+const Activation = zgc.nn.Activation;
 const weight_keys = [_]Sources{ .w1, .w2, .w3, .w4 };
 const bias_keys = [_]Sources{ .b1, .b2, .b3, .b4 };
 
@@ -37,27 +37,23 @@ fn DenseBenchmark(
         .max_input_refs = layer_count * 5,
         .max_outputs = 1,
     });
-    const definition = definition: {
-        var builder = Definition.init();
-        var value = builder.input(.input, .f32, &.{ batch_size, sizes[0] });
-        inline for (0..layer_count) |layer| {
-            const weights = builder.parameter(
-                weight_keys[layer],
-                .f32,
-                &.{ sizes[layer], sizes[layer + 1] },
-            );
-            const bias = builder.parameter(
-                bias_keys[layer],
-                .f32,
-                &.{sizes[layer + 1]},
-            );
-            value = builder.add(builder.matmul(value, weights), bias);
-            value = switch (activations[layer]) {
-                .relu => builder.relu(value),
-                .softmax => builder.softmax(value, 1),
+    const Dense = zgc.nn.Dense(Sources);
+    const Network = comptime network: {
+        var layers: [layer_count]Dense = undefined;
+        for (0..layer_count) |layer| {
+            layers[layer] = .{
+                .weights = weight_keys[layer],
+                .bias = bias_keys[layer],
+                .output_size = sizes[layer + 1],
+                .activation = activations[layer],
             };
         }
-        builder.output(value);
+        break :network zgc.nn.Sequential(layers);
+    };
+    const definition = definition: {
+        var builder = Definition.init();
+        const input = builder.input(.input, .f32, &.{ batch_size, sizes[0] });
+        builder.output(Network.apply(&builder, input));
         break :definition builder.finish();
     };
     const Model = definition.modelWith(.{ .input = zgc.Source.bound });

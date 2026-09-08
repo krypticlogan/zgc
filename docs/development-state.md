@@ -50,6 +50,15 @@ Zig 0.16.0. The API should still be expected to change.
 | Softmax | Stable single-axis floating-point implementation, including strided axes |
 | Transpose | Aliasing graph view; no runtime copy or kernel |
 
+### Domain abstractions
+
+- `zgc.nn.Dense` declares weights and bias sources and expands to matmul, add,
+  and an optional core activation.
+- `zgc.nn.Sequential` composes graph-layer definitions in order.
+- Dense layers accept `[input, output]` or `[output, input]` parameter storage.
+- `zgc.img.Dimensions` and `zgc.img.input` provide channel-first and
+  channel-last rank-4 input conventions.
+
 ### Model and storage
 
 - One inline, aligned memory allocation per model instance with lifetime-based
@@ -89,9 +98,6 @@ Zig 0.16.0. The API should still be expected to change.
   backend exists.
 - External parameter packs and memory-mapped parameter bindings are not yet
   implemented; parameters can currently be owned or compile-time embedded.
-- `src/extensions/` provides standalone matrix and feed-forward network
-  utilities through `zgc.Extensions`; model graphs use the separate
-  `DefinitionBackend` API.
 - Public naming and module boundaries remain subject to change before a stable
   release.
 
