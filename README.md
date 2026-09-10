@@ -1,306 +1,201 @@
-# ZFFNN — Compile-Time Feedforward Neural Networks in Zig
+# Zig Graph Compiler
 
-A statically-defined feedforward neural network library built using Zig's comptime system.
+ZGC is an allocation-free inference graph compiler for Zig. A model
+architecture is defined at compile time, lowered to a fixed execution graph,
+assigned an inline memory plan, and emitted as a specialized Zig type.
+The binary is the model: graph traversal, tensor ranks, shapes, dtypes, layouts,
+and kernel selection are compile-time-known.
 
-Networks are fully constructed at compile time, with:
-- compile-time shape validation
-- zero heap allocation
-- static memory layout
-- deterministic binaries
+The project targets Zig 0.16.0.
 
-This library is primarily designed for **inference on pretrained models**, particularly in constrained or embedded environments. 
+## Capabilities
 
-A demo is provided for example usage.
+- Typed, front-facing `DefinitionBackend` with enum-indexed sources.
+- Counting, graph-lowering, and validation passes through `definition.model()`.
+- Exact graph capacities derived from user-configurable definition bounds.
+- Lifetime-planned, reusable inline model memory with no heap allocation during
+  execution.
+- Static-geometry model views and dynamic low-level views for contiguous,
+  offset, broadcast, transposed, and generally strided layouts.
+- Multiple graph inputs, parameters, constants, and outputs.
+- Source-free scalar literals and storage-efficient zero-stride filled tensors.
+- `f32`, `f16`, and `i8` tensor metadata and elementwise kernels where valid.
+- ReLU, exp, add, sub, mul, div, matmul, sum, mean, min, max, softmax, and concatenation compute operations.
+- Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.
+- Trailing-axis broadcasting for binary arithmetic and compile-time single- or multi-axis reductions.
+- SIMD fast paths for contiguous kernels and generic strided traversal.
+- Core-backed dense and sequential graph layers through `zgc.nn`.
+- Rank-4 image input conventions through `zgc.img`.
+- Operation and generated-model benchmarks, plus a standalone sandbox package.
 
+See [development state](docs/development-state.md) for precise limitations and
+[architecture](docs/architecture.md) for the compilation pipeline.
 
 #### *Note that this library is currently in active development and not fully tested. As such, it is not recommended for use in critical software. Use with caution and if you run into any issues during usage, make me aware and I'll do my best to get it fixed.*
 
-*Also note that currently all parameters assumed to be f32, including at embedding time. Support for dtype is coming, but not yet implemented*
+## Defining a model
 
----
+`DefinitionBackend` is the model-building surface. Source keys and tensor
+values are concrete types; user code does not run separately against counting
+and graph builders.
 
-## Installation
-
-```bash
-zig fetch --save git+https://github.com/krypticlogan/zffnn
-```
-Add to your build.zig:
 ```zig
-const nn_dep = b.dependency("zffnn", .{
-    .target = target,
-    .optimize = optimize,
-});
-const zffnn = nn_dep.module("zffnn");
-```
-Then later on, when creating your target, add the module as an import.
-```zig
-const exe = b.addExecutable(.{
-    .name = "demo",
-    .root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "zffnn", .module = zffnn }, // import the module here
-        },
+const std = @import("std");
+const zgc = @import("zgc");
 
-    }),
-});
-```
-Lastly, import the module in your src exe:
-```zig
-const zf = @import("zffnn");
-```
+const Sources = enum(usize) { input, weights };
+const Definition = zgc.DefinitionBackend(Sources, .{ .max_rank = 2 });
 
-### Defining a Network
+fn define(builder: *Definition) void {
+    const input = builder.input(.input, .f32, &.{ 4, 8 });
+    const weights = builder.parameter(.weights, .f32, &.{ 8, 16 });
+    builder.output(builder.relu(builder.matmul(input, weights)));
+}
 
-Networks are defined at compile time using a shape + activation specification:
-```zig
-const Activation = zf.Activation;
-const NN = zf.NN;
-
-const definition: []const struct { usize, Activation } = &.{
-    .{784, .none},     // input layer (no activation)
-    .{128, .relu},     // hidden
-    .{10, .softmax},   // output
+const definition = blk: {
+    var builder = Definition.init();
+    define(&builder);
+    break :blk builder.finish();
 };
 
-const Net = NN(definition, batch_size);
-```
-# Usage
-## Minimal Flow for inference using pretrained weights
-```zig
-const zf = @import("zffnn");
-const Activation = zf.Activation;
-const NN = zf.NN;
+const MyModel = definition.model();
 
-const definition: []const struct { usize, Activation } = &.{ 
-    .{feature_ct, .none}, 
-    .{10, .relu}, 
-    .{15, .sigmoid}, 
-    .{2, .softmax}
-};
-const Net = NN(definition, batch_size); // Generated NN type
-var nn = comptime Net.load_from_embeds(); // this line requires setup in build.zig 
+pub fn main() !void {
+    var model = MyModel.init();
 
-const preds = nn.forward(input); // inference (everything prior to this is comptime)
-preds.show();
-```
-### Embedding Parameters
-Using weights and biases binaries within the library requires some setup.
+    const input_values: [4 * 8]f32 = @splat(1);
+    const weight_values: [8 * 16]f32 = @splat(0.25);
+    try model.copyInput(.input, &input_values);
+    try model.copySource(.weights, &weight_values);
+    model.run();
 
-Parameters must be embedded at compile time to ensure validity and static inference, so a helper artifact is provided to facilitate passing binaries from a local directory to the model.
-```zig
-{ // Run the embed helper to generate the embeds.zig file
-    const params_dir = b.path("model_params");
-    const embed_file_name = "embeds.zig";
-    
-    const zffn_embed_gen = nn_dep.artifact("embed_helper");
-    const run_gen = b.addRunArtifact(zffn_embed_gen);
-    run_gen.addArg("3"); // number of trainable layers (all but the input), 3 here
-    run_gen.addArg(embed_file_name);
-    run_gen.addDirectoryArg(params_dir); // directory containing model parameters
-    
-    const out_dir = run_gen.addOutputDirectoryArg("zffnn_embeds"); // output directory for the generated embeds.zig file
-
-    const embed_mod = b.createModule(.{
-        .root_source_file = out_dir.path(b, embed_file_name),
-        .target = target,
-        .optimize = optimize,
-    });
-    // add the embed module to the zffnn import, the name "embed_params" must be used
-    zffnn.addImport("embed_params", embed_mod);
+    const output = model.outputView(0);
+    std.debug.print("shape={any} data={any}\n", .{ output.shape, output.storage });
 }
 ```
 
-Inside your exe, you can call:
-```zig
-var nn = comptime Net.load_from_embeds();
-```
-as shown before, and there goes your model, ready to recieve input.
+Definition limits have defaults and may be overridden at compile time. These
+are front-end bounds, not final allocation sizes. The counting pass derives the
+exact node, tensor, reference, output, source, and rank capacities before graph
+construction and memory planning.
 
----
+## Neural-network layers
 
-# Internals
-## Constraints
-
-```definition.len``` >= 2
-
-First layer must use ```.none ``` activation
-
-Each layer defines:
-
-- number of nodes
-
-- activation function
-
-Supported activations:
-
-- ```.relu```
-
-- ```.sigmoid```
-
-- ```.softmax```
-
-## Shape Conventions
-
-This library uses column-major activations internally and batch-major inputs externally.
-
-This makes mathematical operations easier for the engine, but allows users to keep 'normal' representation of the data.
-
-### Input
-```zig 
-Mat(batch_size, input_size)
-```
-
-Where:
-
-One row = one sample
-
-One column = one feature
-
-### Internal Representation
-
-All internal activations are stored as:
+`zgc.nn` composes higher-level layers through `DefinitionBackend`; it does not
+provide a separate tensor runtime.
 
 ```zig
-Mat(layer_size, batch_size)
+const Dense = zgc.nn.Dense(Sources);
+const Classifier = zgc.nn.Sequential(&[_]Dense{
+    .{ .weights = .w1, .bias = .b1, .output_size = 16, .activation = .relu },
+    .{ .weights = .w2, .bias = .b2, .output_size = 10, .activation = .softmax },
+});
+
+const input = builder.input(.input, .f32, &.{ batch_size, input_size });
+builder.output(Classifier.apply(builder, input));
 ```
 
-So the input is transposed on entry.
+Dense weights use logical `[input, output]` storage by default. Set
+`.weight_layout = .output_input` for sources stored as `[output, input]`; the
+layer adds an aliasing transpose before matmul.
 
-### Output
+`zgc.img.Dimensions` defines channel-first or channel-last rank-4 shapes, and
+`zgc.img.input` declares a core graph input with that convention.
+
+## Source storage
+
+Sources use model-owned storage by default. Runtime inputs can be copied into
+that storage with `copyInput`, while owned parameters and constants use the
+typed `copySource` API shown above.
+
+Parameters and constants may instead be embedded directly into the program:
+
 ```zig
-Mat(output_size, batch_size)
+const EmbeddedModel = definition.modelWith(.{
+    .weights = zgc.Source.embed(@embedFile("weights.bin")),
+});
 ```
----
 
-## Forward Pass
+The required byte length is derived from the source tensor's compile-time dtype
+and shape and checked during compilation. `Source.embed` accepts raw logical
+row-major, native-endian tensor data and packs it at compile time when lowering
+selects another physical layout. `Source.embedPacked` accepts bytes already in
+the layout reported by `Model.sourceLayout`. Embedded values remain read-only
+and do not receive a region in the model's mutable memory plan.
+
+Inputs can also borrow caller-owned runtime storage without a copy:
+
 ```zig
-var nn = Net.new();
-const output = nn.forward(input);
+const BorrowingModel = definition.modelWith(.{
+    .input = zgc.Source.bound,
+    .weights = zgc.Source.embed(@embedFile("weights.bin")),
+});
+
+var model = BorrowingModel.init();
+try model.bindInput(.input, runtime_values);
+model.run();
 ```
 
-Input must match: *(batch_size, input_size)*
+The bound slice must:
 
-Output shape is: *(output_size, batch_size)*
+- use the physical order reported by `BorrowingModel.sourceLayout(.input)`
+- remain alive and unchanged while `run()` is executing.
 
-## Matrix API
+It may be updated or rebound between runs. `copyInput` accepts logical
+row-major values and packs them when lowering selects another layout.
 
-### Core matrix type: ```Mat(rows, cols)```
+Unspecified sources use model-owned storage, so `definition.model()` is
+equivalent to an all-owned source plan.
 
-#### Operations
+## Build and test
 
-```add```, ```sub``` full match OR per-row broadcast *(n, m) + (n, 1)*
+```sh
+zig build test
+zig build check
+```
 
-```mul``` standard matrix multiplication
+The package exports a module named `zgc`. The [sandbox](sandbox/README.md) shows
+how a separate Zig package consumes it through `b.dependency("zgc", ...)`.
 
-```t()``` transpose
+## Benchmarks
 
-```exp```, ```sum```, ```max``` per row ops 
+Run the complete suite in `ReleaseFast`:
 
-```relu()```, ```sigmoid()```, ```softmax()``` activations
+```sh
+zig build benchmark -Doptimize=ReleaseFast
+```
 
-All operations are:
+Select an individual case with `-Dop`, for example:
 
-- shape-checked at compile time
+```sh
+zig build benchmark -Dop=matmul-rhs-strided -Doptimize=ReleaseFast
+```
 
-- allocation-free
+See the [benchmark dashboard](benchmarks/README.md) for selectors, methodology,
+and recorded results.
 
-### Memory Model
-- No heap allocation
+## Repository layout
 
-- All tensors are stack or static
+| Path | Purpose |
+| --- | --- |
+| `src/zgc/backends/` | Definition, exact counting, graph lowering, validation, and pipeline orchestration |
+| `src/zgc/kernels/` | Elementwise, reduction, contraction, layout, and special kernels |
+| `src/zgc/` | Graph, tensor/view, operation, storage, and executable-model machinery |
+| `src/cli/` | Model-specific command-line entry points |
+| `src/artifact/` | Generated-model artifact entry points |
+| `src/extensions/` | Core-backed domain abstractions exported as `zgc.nn` and `zgc.img` |
+| `tests/` | Compile-time graph, runtime model, validation, view, and kernel coverage |
+| `benchmarks/` | Operation and generated-model benchmark harness, with recorded results |
+| `sandbox/` | Standalone model definitions, interactive inference, inspection, and artifact analysis |
+| `docs/` | Architecture, design constraints, capabilities, and limitations |
 
-- Network structure is part of the type
+## Documentation
 
-### Compiled binary contains:
-
-- model weights
-
-- full network layout
-
-## What This Library Is (and Isn’t)
-### Designed For
-
-- Pretrained inference
-
-- Embedded systems
-
-- Deterministic execution
-
-- Small binary deployments
-
-i.e
-- Embedded deterministic NPC logic in games
-- Inference on embedded systems (Raspberry Pi with sensors)
-- Any constrained environment where determinism and memory are paramount.
-
-### *Not* Designed For
-
-- Dynamic model construction
-
-- Runtime shape changes
-
-- GPU acceleration
-
-- Large-scale training workloads
-
-### Key Differences from PyTorch / TensorFlow
-
-| Feature | ZFFNN | PyTorch / TF |
-|----|----|----|
-Graph construction | Compile-time | Runtime
-Memory | Static	| Dynamic
-Shape errors | Compile-time	| Runtime
-Model loading | Embedded in binary | Runtime IO
-Flexibility	| Low | High
-Determinism | Built-in | Varies
-
-### Limitations
-
-- Dense layers only
-
-- No backpropagation (planned)
-
-- No loss functions (planned)
-
-- Limited activation set
-
-- Compile times increase with model size
-
-- No hardware-specific kernel optimization (yet)
-
-### Roadmap
-
-- Backpropagation + training
-
-- Additional activations
-
-- Loss functions
-
-- Sparse layers
-
-- SIMD improvements
-
-- Optional inference-only stripped builds
-
-### Summary
-
-ZFFNN treats neural networks as compile-time constructs, not runtime objects.
-
-This enables:
-
-- stronger guarantees
-
-- simpler execution model
-
-- predictable performance
-
-- minimal runtime overhead
-
-At the cost of:
-
-- flexibility
-
-- compile-time complexity
+- [Documentation index](docs/README.md)
+- [Architecture and compilation pipeline](docs/architecture.md)
+- [Design constraints](docs/design-constraints.md)
+- [Model inspection](docs/inspection.md)
+- [Generated model artifacts](docs/model-artifacts.md)
+- [Development state](docs/development-state.md)
+- [Sandbox and binary inspection](sandbox/README.md)
+- [Benchmarks](benchmarks/README.md)

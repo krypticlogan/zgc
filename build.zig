@@ -1,107 +1,114 @@
 const std = @import("std");
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // embed params generator
-    const gen = b.addExecutable(.{
-        .name = "embed_helper",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("embed_helper/embeddings_gen.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(gen);
 
     // library
-    const root_mod = b.addModule("zffnn", .{
+    const zgc_mod = b.addModule("zgc", .{
         .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    _ = b.addModule("zgc_inspect_cli", .{
+        .root_source_file = b.path("src/cli/inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+    });
+    _ = b.addModule("zgc_model_runner", .{
+        .root_source_file = b.path("src/artifact/model_runner.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // tests
-    const test_mod = b.addModule("zffnn_tests", .{
+    const test_embed_params = b.createModule(.{
+        .root_source_file = b.path("tests/fixtures/embed_params.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const test_root_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const test_mod = b.addModule("zgc_tests", .{
         .root_source_file = b.path("tests/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    test_mod.addImport("zffnn", root_mod);
+    test_mod.addImport("zgc", test_root_mod);
+    test_mod.addImport("embed_params", test_embed_params);
 
     const tests = b.addTest(.{
         .root_module = test_mod,
     });
-    const run_mod_tests = b.addRunArtifact(tests);
 
-    const test_step = b.step("test", "Run tests");
-
-    test_step.dependOn(&run_mod_tests.step);
-
-    // benchmarks
-    //
-    const benchmark_cli = b.option([]const u8, "benchmark", "Benchmark to run: inference|batch_sweep|ops") orelse "inference";
-    const model_cli = b.option([]const u8, "model", "Model size: small|medium|large") orelse "small";
-    const batch_size_cli = b.option(usize, "batch_size", "Batch size") orelse 1;
-    const iterations_cli = b.option(usize, "iterations", "Iterations per run") orelse 20_000;
-    const runs_cli = b.option(usize, "runs", "Runs per model") orelse 3;
-    const seed_cli = b.option(usize, "seed", "PRNG seed") orelse 1234;
-    const write_out_cli = b.option(bool, "write_out", "Write CSV output") orelse false;
-
-    const benchmark_opts = b.addOptions();
-    benchmark_opts.addOption([]const u8, "benchmark", benchmark_cli);
-    benchmark_opts.addOption([]const u8, "model", model_cli);
-    benchmark_opts.addOption(usize, "batch_size", batch_size_cli);
-    benchmark_opts.addOption(usize, "iterations", iterations_cli);
-    benchmark_opts.addOption(usize, "runs", runs_cli);
-    benchmark_opts.addOption(usize, "seed", seed_cli);
-    benchmark_opts.addOption(bool, "write_out", write_out_cli);
-
-    const tracy_opts = .{
-        .enable_ztracy = b.option(
-            bool,
-            "enable_ztracy",
-            "Enable Tracy profile markers",
-        ) orelse false,
-        .enable_fibers = b.option(
-            bool,
-            "enable_fibers",
-            "Enable Tracy fiber support",
-        ) orelse false,
-        .on_demand = b.option(
-            bool,
-            "on_demand",
-            "Build tracy with TRACY_ON_DEMAND",
-        ) orelse false,
-    };
-
-    const ztracy_dep = b.dependency("ztracy", .{
-        .enable_ztracy = tracy_opts.enable_ztracy,
-        .enable_fibers = tracy_opts.enable_fibers,
-        .on_demand = tracy_opts.on_demand,
-    });
-
-    const benchmark_mod = b.addModule("zffnn_benchmarks", .{
-        .root_source_file = b.path("benchmarks/benchmark.zig"),
+    const runner_test_model = b.createModule(.{
+        .root_source_file = b.path("tests/fixtures/runner_model.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "ztracy", .module = ztracy_dep.module("root") },
-        },
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-
-    benchmark_mod.addImport("zffnn", root_mod);
-    benchmark_mod.addImport("build_options", benchmark_opts.createModule());
-    const benchmark = b.addExecutable(.{
-        .name = "benchmark",
-        .root_module = benchmark_mod,
+    const runner_test_module = b.createModule(.{
+        .root_source_file = b.path("src/artifact/model_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "model", .module = runner_test_model }},
     });
-    benchmark.linkLibrary(ztracy_dep.artifact("tracy"));
+    const runner_test_exe = b.addExecutable(.{
+        .name = "zgc-model-runner-test",
+        .root_module = runner_test_module,
+    });
+    runner_test_exe.forceUndefinedSymbol(if (target.result.os.tag == .macos)
+        "_zgc_run_model"
+    else
+        "zgc_run_model");
 
-    b.installArtifact(benchmark);
+    const check_step = b.step("check", "Compile tests without running them");
+    check_step.dependOn(&tests.step);
+    check_step.dependOn(&runner_test_exe.step);
 
-    const run_benchmark = b.addRunArtifact(benchmark);
-    const benchmark_step = b.step("benchmark", "Run benchmarks");
+    const run_mod_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&runner_test_exe.step);
+
+    // benchmarks
+    const benchmark_op = b.option([]const u8, "op", "Operation, model, or benchmark tier to run") orelse "all";
+    const benchmark_model = b.option([]const u8, "model", "Dense model size used by -Dop=model") orelse "small";
+    const benchmark_batch = b.option(usize, "batch", "Compile-time batch size used by -Dop=model") orelse 1;
+    const benchmark_iterations = b.option(usize, "iterations", "Benchmark invocations per timed sample (0 calibrates to sample_ms)") orelse 0;
+    const benchmark_runs = b.option(usize, "runs", "Number of timed samples") orelse 30;
+    const benchmark_warmup = b.option(usize, "warmup_iterations", "Untimed warmup invocations (0 warms for warmup_ms)") orelse 0;
+    const benchmark_sample_ms = b.option(usize, "sample_ms", "Minimum duration of each automatically calibrated timed sample") orelse 250;
+    const benchmark_warmup_ms = b.option(usize, "warmup_ms", "Duration of the automatic untimed warmup") orelse 2_000;
+
+    const benchmark_options = b.addOptions();
+    benchmark_options.addOption([]const u8, "op", benchmark_op);
+    benchmark_options.addOption([]const u8, "model", benchmark_model);
+    benchmark_options.addOption(usize, "batch", benchmark_batch);
+    benchmark_options.addOption(usize, "iterations", benchmark_iterations);
+    benchmark_options.addOption(usize, "runs", benchmark_runs);
+    benchmark_options.addOption(usize, "warmup_iterations", benchmark_warmup);
+    benchmark_options.addOption(usize, "sample_ms", benchmark_sample_ms);
+    benchmark_options.addOption(usize, "warmup_ms", benchmark_warmup_ms);
+
+    const benchmark_exe = b.addExecutable(.{
+        .name = "zgc-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zgc", .module = zgc_mod },
+                .{ .name = "build_options", .module = benchmark_options.createModule() },
+            },
+        }),
+    });
+    const run_benchmark = b.addRunArtifact(benchmark_exe);
+    const benchmark_step = b.step("benchmark", "Run the benchmark selected by -Dop");
     benchmark_step.dependOn(&run_benchmark.step);
 }

@@ -1,0 +1,7 @@
+model,param_ct,optimize,batch_size,latency_min_ns_per_inference,latency_avg_ns_per_inference,latency_max_ns_per_inference,throughput_min_inferences_per_sec,throughput_avg_inferences_per_sec,throughput_max_inferences_per_sec
+32-16-8,664,ReleaseFast,1,311.59,313.20,315.55,3169109.05,3192963.90,3209373.01
+128-64-10,8906,ReleaseFast,1,4821.41,4886.47,5006.25,199750.43,204707.66,207408.12
+1024-256-128-64-2,303682,ReleaseFast,1,268009.22,268805.51,270132.34,3701.89,3720.21,3731.21
+32-16-8,664,ReleaseFast,32,111.13,112.07,113.75,8791053.74,8923996.66,8998679.78
+128-64-10,8906,ReleaseFast,32,968.32,973.95,978.38,1022093.05,1026766.20,1032711.19
+1024-256-128-64-2,303682,ReleaseFast,32,168624.05,169453.65,170525.84,5864.21,5901.45,5930.35
