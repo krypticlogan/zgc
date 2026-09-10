@@ -232,7 +232,7 @@ fn calibrateIterations(
     if (build_options.iterations != 0) return build_options.iterations;
 
     const target_ns: i96 = @intCast(build_options.sample_ms * std.time.ns_per_ms);
-    var iterations = Benchmark.default_iterations;
+    var iterations: usize = Benchmark.default_iterations;
     for (0..4) |_| {
         const start = clock.now(init.io).nanoseconds;
         selected.run(iterations);

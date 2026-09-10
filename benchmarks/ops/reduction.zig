@@ -50,7 +50,7 @@ fn ReductionBenchmark(
                     .strides = .{1},
                     .offset = 0,
                 };
-                const op: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 1 } } };
+                const op: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 1 } } };
                 for (0..iterations) |_| {
                     op.execute(.{input}, output);
                     std.mem.doNotOptimizeAway(&self.output_storage);
