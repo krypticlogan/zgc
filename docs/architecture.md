@@ -165,14 +165,34 @@ Kernels are grouped by family:
 
 | Family | Implemented operations |
 | --- | --- |
-| Elementwise | ReLU, exp, add, sub; broadcasting for binary operations |
+| Literals | Rank-zero scalar values and zero-stride filled-tensor expansion |
+| Elementwise | ReLU, exp, add, sub, mul, div; trailing-axis broadcasting for binary operations |
 | Contraction | Rank-2 matmul |
-| Reduction | Sum over one axis |
+| Reduction | Sum, mean, min, and max over compile-time axis sets |
 | Special | Softmax over one axis |
-| Layout | Compile-time transpose inference |
+| Concatenation | Materialized output with contiguous block-copy and static strided paths |
+| Layout | Compile-time transpose, permutation, reshape, flatten, squeeze, unsqueeze, and slicing inference |
+
+Binary arithmetic aligns shapes from the trailing axis. Equal extents are
+paired directly, singleton extents broadcast with zero strides, and absent
+leading axes behave as singleton dimensions. Reduction axes are normalized,
+deduplicated, and encoded at definition time. `keep_dims` retains reduced axes
+as singleton dimensions so reduction outputs can broadcast back over inputs.
+
+Scalar literals are immutable, source-free rank-zero tensors embedded in the
+generated program. They do not reserve model memory or execute a kernel. A
+filled tensor is a scalar literal followed by a zero-stride broadcast view, so
+its storage remains one element regardless of logical shape.
+
+Structural operations create aliases and do not execute kernels. Squeeze and
+unsqueeze preserve arbitrary source strides. Flatten requires its selected
+axis range to be logically contiguous. General reshape currently requires a
+logically row-major contiguous source because it must preserve element order
+without copying. Permutation lowers to transpose aliases. Slicing uses
+compile-time positive bounds and steps to produce an offset strided alias.
 
 Elementwise kernels use SIMD for row-major tensors and matching dense axis
-permutations. Trailing-vector add/sub also vectorizes across a contiguous first
+permutations. Trailing-vector binary arithmetic also vectorizes across a contiguous first
 axis, covering bias operations on batch-oriented matmul results. Selected
 reduction and contraction paths use SIMD. Generic view traversal handles
 offsets and positive or negative strides where the relevant kernel supports

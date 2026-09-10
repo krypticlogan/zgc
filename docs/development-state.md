@@ -4,12 +4,22 @@ ZGC is functional but pre-release. The compile-time definition-to-model path,
 runtime execution, tests, sandbox, and operation benchmark suite are working on
 Zig 0.16.0. The API should still be expected to change.
 
-## Need to implement
-1. reshape / permute / slice
-2. mul / div
-3. max / mean reductions
-4. concatenate
-5. convolution
+## Implementation roadmap
+
+1. Add explicit `contiguous` and `copy` materialization with lowering-selected
+   destination layouts.
+2. Complete scalar mathematics with negation, absolute value, square root,
+   logarithm, reciprocal, elementwise min/max, and clamp.
+3. Add dtype conversion and settle boolean-mask and tensor-index dtypes.
+4. Build comparisons, conditional selection, argmin/argmax, and runtime-indexed
+   gather on those dtypes.
+5. Generalize matmul to broadcastable batch dimensions with compile-time
+   traversal plans.
+6. Add padding and window geometry, followed by convolution and pooling.
+7. Add graph optimization passes for constant folding, dead-node elimination,
+   operation fusion, and cost-based layout selection.
+8. Introduce explicitly bounded runtime extents where they preserve static
+   kernel specialization and memory planning.
 
 ## Implemented
 
@@ -42,13 +52,15 @@ Zig 0.16.0. The API should still be expected to change.
 
 | Operation | Current support |
 | --- | --- |
+| Scalar/full | Source-free rank-zero literals and zero-stride filled-tensor aliases |
 | ReLU | SIMD over matching dense layouts and generic strided traversal; float and signed integer |
 | Exp | Floating-point tensors; SIMD over matching dense layouts and strided traversal |
-| Add/sub | Matching dtypes, NumPy-style trailing-axis broadcasting, dense-layout and batch-broadcast SIMD paths, strided traversal |
+| Add/sub/mul/div | Matching dtypes, trailing-axis broadcasting, dense-layout and batch-broadcast SIMD paths, strided traversal; div is floating-point |
 | Matmul | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal |
-| Sum | Single-axis reduction, including strided axes and rank-zero results |
+| Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, and strided traversal; mean is floating-point |
 | Softmax | Stable single-axis floating-point implementation, including strided axes |
-| Transpose | Aliasing graph view; no runtime copy or kernel |
+| Concat | Matching-rank and matching-dtype inputs materialized along one compile-time axis |
+| Structural views | Transpose, permutation, reshape, flatten, squeeze, unsqueeze, slicing, and explicit broadcasting aliases with no runtime kernels |
 
 ### Domain abstractions
 
@@ -79,7 +91,6 @@ Zig 0.16.0. The API should still be expected to change.
 - Reusable model-specific inspection CLI and generated-model runner modules.
 - Standalone sandbox consumer with an interactive model application and model
   artifact tooling.
-- Embedding generator executable remains part of the root build.
 
 ## Important limitations
 
@@ -111,6 +122,7 @@ The test suite currently exercises:
 - aligned memory planning and source loading;
 - model execution and typed output access;
 - contiguous, offset, broadcast, transposed, and negative-stride views;
-- ReLU, exp, add, sub, matmul, sum, softmax, and transpose behavior;
+- ReLU, exp, add, sub, mul, div, matmul, sum, mean, min, max, and softmax behavior;
+- transpose, permutation, reshape, flatten, squeeze, unsqueeze, and slicing alias behavior;
 - SIMD tails and strided fallbacks;
 - end-to-end execution across graph-produced aliasing views.

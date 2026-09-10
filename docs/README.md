@@ -7,6 +7,8 @@ runtime storage, supported operations, constraints, and tooling.
   memory planning, and generated model execution.
 - [Design constraints](design-constraints.md) — compile-time specialization,
   source ownership, execution, and memory invariants.
+- [Operation semantics](operations.md) — shape, dtype, broadcasting,
+  reduction, concatenation, and structural-view contracts.
 - [Model inspection](inspection.md) — writer-based representations and the
   model-specific inspection CLI.
 - [Generated model artifacts](model-artifacts.md) — minimal model executables

@@ -8,6 +8,8 @@ construction and execution flow.
 
 - Architecture, tensor ranks, shapes, dtypes, layouts, and operation order are
   known at compile time.
+- Tensor dimensions are positive; zero-length dimensions are rejected during
+  definition.
 - Definition bounds limit front-end construction. The counting pass derives the
   exact capacities used by graph lowering and memory planning.
 - Shape and operation compatibility errors are reported during compilation when
@@ -41,6 +43,11 @@ in the model's mutable memory plan.
   output storage.
 - Layout-changing graph operations such as transpose create aliases rather than
   copying tensor data.
+- Reshape, flatten, squeeze, and unsqueeze are aliasing views. Reshape requires
+  logical row-major contiguity, while flatten requires contiguity only within
+  its collapsed axis range.
+- Axis permutation lowers to transpose aliases. Static slices use positive
+  bounds and steps and retain the source storage root.
 - Generated-model views carry shape, strides, base offset, element count, and
   layout traits in their types. Their runtime state contains storage and any
   cursor offset introduced by runtime-selected subviews.
@@ -51,6 +58,10 @@ in the model's mutable memory plan.
   while lowering may store them output-major with physical strides `[1, K]`.
 - Generated matmuls carry a compile-time traversal plan selected from concrete
   graph layouts. Direct low-level calls must select a concrete strategy.
+- Concatenation materializes distinct contiguous output storage. Its axis and
+  input geometry are validated and specialized before execution.
+- Filled tensors alias one scalar storage element through zero strides. They do
+  not allocate or initialize storage proportional to their logical shape.
 - `run()` executes the fixed operation list sequentially. Runtime input values
   may change between runs without rebuilding the model type.
 

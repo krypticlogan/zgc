@@ -18,8 +18,11 @@ The project targets Zig 0.16.0.
 - Static-geometry model views and dynamic low-level views for contiguous,
   offset, broadcast, transposed, and generally strided layouts.
 - Multiple graph inputs, parameters, constants, and outputs.
+- Source-free scalar literals and storage-efficient zero-stride filled tensors.
 - `f32`, `f16`, and `i8` tensor metadata and elementwise kernels where valid.
-- ReLU, exp, add, sub, matmul, sum, softmax, and transpose operations.
+- ReLU, exp, add, sub, mul, div, matmul, sum, mean, min, max, softmax, and concatenation compute operations.
+- Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.
+- Trailing-axis broadcasting for binary arithmetic and compile-time single- or multi-axis reductions.
 - SIMD fast paths for contiguous kernels and generic strided traversal.
 - Core-backed dense and sequential graph layers through `zgc.nn`.
 - Rank-4 image input conventions through `zgc.img`.
