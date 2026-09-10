@@ -1,5 +1,6 @@
 const std = @import("std");
 const zgc = @import("zgc");
+const models = @import("fixtures/models.zig");
 
 const Sources = enum(usize) { input };
 const Definition = zgc.DefinitionBackend(Sources, .{
@@ -11,16 +12,7 @@ const Definition = zgc.DefinitionBackend(Sources, .{
 });
 
 test "lifetime analysis produces half-open intermediate intervals" {
-    const definition = comptime blk: {
-        var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{ 2, 2 });
-        const first = builder.relu(input);
-        const second = builder.relu(first);
-        builder.output(builder.relu(second));
-        break :blk builder.finish();
-    };
-    const Model = definition.model();
-    const lifetimes = Model.lifetime_analysis.tensor_lifetimes;
+    const lifetimes = models.ReuseModel.lifetime_analysis.tensor_lifetimes;
 
     try std.testing.expect(lifetimes[0].isPersistent());
     try std.testing.expectEqual(@as(usize, 0), lifetimes[1].begin_node);

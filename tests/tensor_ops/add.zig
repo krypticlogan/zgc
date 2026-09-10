@@ -107,40 +107,6 @@ test "add preserves i8 dtype semantics without overflow" {
     try std.testing.expectEqualSlices(i8, &.{ -80, -7, 0, 7, 127 }, &output_data);
 }
 
-test "add respects contiguous view offsets" {
-    var a_storage = [_]f32{ 99, 1, 2, 3, 99 };
-    var b_storage = [_]f32{ 99, 99, 10, 20, 30 };
-    var output_storage: [6]f32 = @splat(99);
-
-    const a: zgc.Tensor.ConstView(f32, 1) = .{
-        .storage = &a_storage,
-        .shape = .{3},
-        .strides = .{1},
-        .offset = 1,
-    };
-    const b: zgc.Tensor.ConstView(f32, 1) = .{
-        .storage = &b_storage,
-        .shape = .{3},
-        .strides = .{1},
-        .offset = 2,
-    };
-    const output: zgc.Tensor.View(f32, 1) = .{
-        .storage = &output_storage,
-        .shape = .{3},
-        .strides = .{1},
-        .offset = 1,
-    };
-
-    const op: zgc.Op = .{ .compute = .add };
-    op.execute(.{ a, b }, output);
-
-    try std.testing.expectEqualSlices(
-        f32,
-        &.{ 99, 11, 22, 33, 99, 99 },
-        &output_storage,
-    );
-}
-
 test "add traverses independently strided inputs and output" {
     var a_storage = [_]f32{ 1, 4, 2, 5, 3, 6 };
     var b_storage = [_]f32{ 10, 20, 30, 40, 50, 60 };

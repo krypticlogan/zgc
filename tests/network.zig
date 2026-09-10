@@ -129,6 +129,9 @@ test "image helpers declare channel-aware core inputs" {
         builder.output(image);
         break :blk builder.finish();
     };
-    const graph = image_definition.model().build_graph;
-    try std.testing.expectEqualSlices(usize, &.{ 2, 28, 28, 3 }, graph.tensors[0].?.shape.slice());
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 2, 28, 28, 3 },
+        image_definition.tensors[0].value.shape.slice(),
+    );
 }

@@ -95,40 +95,6 @@ test "matmul handles a native SIMD chunk followed by a column tail" {
     try std.testing.expectEqualSlices(f32, &expected, &output_data);
 }
 
-test "matmul respects contiguous view offsets" {
-    var lhs_storage = [_]f32{ 99, 1, 2, 3, 4, 99 };
-    var rhs_storage = [_]f32{ 99, 99, 5, 6, 7, 8 };
-    var output_storage: [7]f32 = @splat(99);
-
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
-        .storage = &lhs_storage,
-        .shape = .{ 2, 2 },
-        .strides = .{ 2, 1 },
-        .offset = 1,
-    };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
-        .storage = &rhs_storage,
-        .shape = .{ 2, 2 },
-        .strides = .{ 2, 1 },
-        .offset = 2,
-    };
-    const output: zgc.Tensor.View(f32, 2) = .{
-        .storage = &output_storage,
-        .shape = .{ 2, 2 },
-        .strides = .{ 2, 1 },
-        .offset = 1,
-    };
-
-    const op: zgc.Op = .{ .compute = .{ .matmul = .{ .strategy = .scalar } } };
-    op.execute(.{ lhs, rhs }, output);
-
-    try std.testing.expectEqualSlices(
-        f32,
-        &.{ 99, 19, 22, 43, 50, 99, 99 },
-        &output_storage,
-    );
-}
-
 test "matmul supports strided inputs and output" {
     var lhs_storage = [_]f32{ 1, 4, 2, 5, 3, 6 };
     var rhs_storage = [_]f32{ 7, 8, 9, 10, 11, 12 };

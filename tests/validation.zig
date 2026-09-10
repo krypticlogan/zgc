@@ -72,3 +72,13 @@ test "validation checks trailing-axis broadcast compatibility" {
     try std.testing.expect(zgc.Validation.shapesBroadcast(outer_lhs, outer_rhs));
     try std.testing.expect(!zgc.Validation.shapesBroadcast(matrix, invalid));
 }
+
+test "validation checks normalized reduction axis sets" {
+    const Value = ShapedValue(3);
+    const tensor = Value{ .dtype = .f32, .shape = .init(&.{ 2, 3, 4 }) };
+
+    try std.testing.expect(zgc.Validation.reductionAxesAreValid(tensor, 0b001));
+    try std.testing.expect(zgc.Validation.reductionAxesAreValid(tensor, 0b101));
+    try std.testing.expect(!zgc.Validation.reductionAxesAreValid(tensor, 0));
+    try std.testing.expect(!zgc.Validation.reductionAxesAreValid(tensor, 0b1000));
+}

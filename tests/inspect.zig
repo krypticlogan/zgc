@@ -1,21 +1,7 @@
 const std = @import("std");
 const zgc = @import("zgc");
-
-const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBackend(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 3,
-    .max_input_refs = 2,
-    .max_outputs = 1,
-});
-
-const Model = model: {
-    var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ 2, 3 });
-    builder.output(builder.relu(builder.transpose(input, 0, 1)));
-    break :model builder.finish().model();
-};
+const models = @import("fixtures/models.zig");
+const Model = models.BasicModel;
 
 test "inspection renders a generated model through a writer" {
     var buffer: [8192]u8 = undefined;
@@ -57,26 +43,10 @@ test "inspection renders bounded model memory" {
 }
 
 test "inspection renders reused regions in tensor order" {
-    const ReuseDefinition = zgc.DefinitionBackend(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 3,
-        .max_tensors = 4,
-        .max_input_refs = 3,
-        .max_outputs = 1,
-    });
-    const definition = comptime blk: {
-        var builder = ReuseDefinition.init();
-        const input = builder.input(.input, .f32, &.{4});
-        const first = builder.relu(input);
-        const second = builder.relu(first);
-        builder.output(builder.relu(second));
-        break :blk builder.finish();
-    };
-    const ReuseModel = definition.modelWith(.{ .input = zgc.Source.bound });
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try zgc.Inspect.writeMemoryPlan(ReuseModel, &writer);
+    try zgc.Inspect.writeMemoryPlan(models.BoundReuseModel, &writer);
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "MemoryPlan(bytes=32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "t1: [0..16)") != null);

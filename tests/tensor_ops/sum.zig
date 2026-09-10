@@ -24,8 +24,8 @@ test "sum reduces either matrix axis" {
         .offset = 0,
     };
 
-    const sum_columns: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 0 } } };
-    const sum_rows: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 1 } } };
+    const sum_columns: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 0 } } };
+    const sum_rows: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 1 } } };
     sum_columns.execute(.{input}, columns);
     sum_rows.execute(.{input}, rows);
 
@@ -49,7 +49,7 @@ test "sum traverses a strided reduction axis" {
         .offset = 0,
     };
 
-    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 1 } } };
+    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 1 } } };
     op.execute(.{input}, output);
 
     try std.testing.expectEqualSlices(f32, &.{ 5, 7, 9 }, &output_storage);
@@ -71,7 +71,7 @@ test "sum reduces a vector to a rank-zero view" {
         .offset = 0,
     };
 
-    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 0 } } };
+    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 0 } } };
     op.execute(.{input}, output);
 
     try std.testing.expectEqual(@as(i8, 10), output_storage[0]);
@@ -95,7 +95,7 @@ test "sum vectorizes a unit-stride reduction axis and handles its tail" {
         .offset = 0,
     };
 
-    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axis = 0 } } };
+    const op: zgc.Op = .{ .compute = .{ .sum = .{ .axes = 1 << 0 } } };
     op.execute(.{input}, output);
 
     try std.testing.expectEqual(@as(f32, @floatFromInt(len)), output_storage[0]);

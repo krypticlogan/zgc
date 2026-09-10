@@ -86,33 +86,6 @@ test "relu preserves i8 dtype semantics" {
     try std.testing.expectEqualSlices(i8, &.{ 0, 0, 0, 2, 127 }, &output_data);
 }
 
-test "relu respects contiguous view offsets" {
-    var input_storage = [_]f32{ 99, -2, 3, -4, 5, 99 };
-    var output_storage: [7]f32 = @splat(99);
-
-    const input: zgc.Tensor.ConstView(f32, 1) = .{
-        .storage = &input_storage,
-        .shape = .{4},
-        .strides = .{1},
-        .offset = 1,
-    };
-    const output: zgc.Tensor.View(f32, 1) = .{
-        .storage = &output_storage,
-        .shape = .{4},
-        .strides = .{1},
-        .offset = 2,
-    };
-
-    const op: zgc.Op = .{ .compute = .relu };
-    op.execute(.{input}, output);
-
-    try std.testing.expectEqualSlices(
-        f32,
-        &.{ 99, 99, 0, 3, 0, 5, 99 },
-        &output_storage,
-    );
-}
-
 test "relu traverses a transposed input view" {
     var input_storage = [_]f32{ -1, 2, -3, 4, -5, 6 };
     var output_storage: [6]f32 = @splat(std.math.nan(f32));

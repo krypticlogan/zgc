@@ -1,29 +1,13 @@
 const std = @import("std");
 const zgc = @import("zgc");
+const models = @import("fixtures/models.zig");
 
 test "memory plan reuses an expired intermediate region" {
-    const Sources = enum(usize) { input };
-    const Definition = zgc.DefinitionBackend(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 3,
-        .max_tensors = 4,
-        .max_input_refs = 3,
-        .max_outputs = 1,
-    });
-    const definition = comptime blk: {
-        var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{4});
-        const first = builder.relu(input);
-        const second = builder.relu(first);
-        builder.output(builder.relu(second));
-        break :blk builder.finish();
-    };
-    const Model = definition.model();
-    const regions = Model.memory_plan.tensor_regions;
+    const regions = models.ReuseModel.memory_plan.tensor_regions;
 
     try std.testing.expectEqual(regions[1], regions[3]);
     try std.testing.expect(regions[1].?.offset != regions[2].?.offset);
-    try std.testing.expectEqual(@as(usize, 3 * 4 * @sizeOf(f32)), Model.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 3 * 4 * @sizeOf(f32)), models.ReuseModel.memory_plan.byte_count);
 }
 
 test "persistent outputs retain distinct regions" {
