@@ -1,5 +1,6 @@
 const std = @import("std");
 const Graph = @import("graph.zig");
+const ScalarValue = @import("dtype.zig").ScalarValue;
 
 /// Compile-time storage selection for a graph source.
 pub const Binding = union(enum) {
@@ -11,6 +12,8 @@ pub const Binding = union(enum) {
     /// bytes are packed into the layout selected during lowering; physical
     /// bytes already satisfy that layout contract.
     embedded: Embedded,
+    /// Compiler-owned immutable scalar storage.
+    literal: ScalarValue,
 };
 
 pub const Embedded = struct {
@@ -85,6 +88,7 @@ pub fn Plan(
                     ));
                 }
             },
+            .literal => @compileError("literal bindings are created by scalar definitions"),
         }
         bindings[source_index] = binding;
     }
@@ -97,13 +101,14 @@ pub fn Plan(
             return switch (tensor_info.origin) {
                 .source => |source_index| source_bindings[source_index],
                 .node => .owned,
+                .literal => |value| .{ .literal = value },
             };
         }
 
         pub fn isOwned(comptime tensor_info: anytype) bool {
             return switch (bindingForTensor(tensor_info)) {
                 .owned => true,
-                .bound, .embedded => false,
+                .bound, .embedded, .literal => false,
             };
         }
     };

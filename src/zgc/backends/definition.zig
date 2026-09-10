@@ -1,5 +1,6 @@
 const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
+const ScalarValue = @import("../dtype.zig").ScalarValue;
 const Op = @import("../op.zig").Op;
 const Tensor = @import("../tensor.zig");
 
@@ -9,6 +10,25 @@ pub const Limits = struct {
     max_tensors: usize = 128,
     max_input_refs: usize = 192,
     max_outputs: usize = 8,
+};
+
+/// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
+/// removed unless `keep_dims` retains them as singleton dimensions.
+pub const ReductionOptions = struct {
+    axes: ?[]const i8 = null,
+    keep_dims: bool = false,
+};
+
+pub const FlattenOptions = struct {
+    start_axis: i8 = 0,
+    end_axis: i8 = -1,
+};
+
+pub const SliceOptions = struct {
+    axis: i8,
+    start: usize = 0,
+    end: ?usize = null,
+    step: usize = 1,
 };
 
 pub fn Value(comptime max_rank: usize) type {
@@ -104,6 +124,33 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             return self.addSource(source_key, .constant, dtype, shape);
         }
 
+        pub fn scalar(self: *Self, comptime dtype: Dtype, comptime value: anytype) ValueType {
+            if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
+            const tensor_id = self.definition.tensor_count;
+            const tensor_value: ValueType = .{
+                .id = tensor_id,
+                .dtype = dtype,
+                .shape = .init(&.{}),
+            };
+            self.definition.tensors[tensor_id] = .{
+                .value = tensor_value,
+                .origin = .{ .literal = ScalarValue.init(dtype, value) },
+            };
+            self.definition.tensor_count += 1;
+            return tensor_value;
+        }
+
+        pub fn full(
+            self: *Self,
+            comptime dtype: Dtype,
+            comptime extents: []const usize,
+            comptime value: anytype,
+        ) ValueType {
+            const scalar_value = self.scalar(dtype, value);
+            if (extents.len == 0) return scalar_value;
+            return self.broadcastTo(scalar_value, extents);
+        }
+
         pub fn relu(self: *Self, comptime tensor: ValueType) ValueType {
             return self.addCompute(.relu, &.{tensor});
         }
@@ -120,16 +167,46 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             return self.addCompute(.sub, &.{ lhs, rhs });
         }
 
+        pub fn mul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.mul, &.{ lhs, rhs });
+        }
+
+        pub fn div(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.div, &.{ lhs, rhs });
+        }
+
         pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
             return self.addCompute(.{ .matmul = .{ .strategy = .scalar } }, &.{ lhs, rhs });
         }
 
-        pub fn sum(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
-            return self.addCompute(.{ .sum = .{ .axis = axis } }, &.{tensor});
+        pub fn sum(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
+            return self.addCompute(.{ .sum = reductionAttrs(tensor, spec) }, &.{tensor});
+        }
+
+        pub fn mean(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
+            return self.addCompute(.{ .mean = reductionAttrs(tensor, spec) }, &.{tensor});
+        }
+
+        pub fn min(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
+            return self.addCompute(.{ .min = reductionAttrs(tensor, spec) }, &.{tensor});
+        }
+
+        pub fn max(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
+            return self.addCompute(.{ .max = reductionAttrs(tensor, spec) }, &.{tensor});
+        }
+
+        pub fn concat(
+            self: *Self,
+            comptime inputs: []const ValueType,
+            comptime axis: i8,
+        ) ValueType {
+            if (inputs.len == 0) @compileError("concat requires at least one input");
+            const normalized = normalizeAxis(inputs[0].shape.rank, axis);
+            return self.addCompute(.{ .concat = .{ .axis = @intCast(normalized) } }, inputs);
         }
 
         pub fn softmax(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
-            return self.addCompute(.{ .softmax = .{ .axis = axis } }, &.{tensor});
+            return self.addCompute(.{ .softmax = .{ .axis = @intCast(normalizeAxis(tensor.shape.rank, axis)) } }, &.{tensor});
         }
 
         pub fn transpose(
@@ -138,17 +215,163 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             comptime axis_a: i8,
             comptime axis_b: i8,
         ) ValueType {
-            if (axis_a < 0 or axis_b < 0 or axis_a >= tensor.shape.rank or axis_b >= tensor.shape.rank) {
-                @compileError("transpose axis is outside the tensor rank");
-            }
+            const normalized_a = normalizeAxis(tensor.shape.rank, axis_a);
+            const normalized_b = normalizeAxis(tensor.shape.rank, axis_b);
             var shape = tensor.shape;
-            std.mem.swap(usize, &shape.dims[@intCast(axis_a)], &shape.dims[@intCast(axis_b)]);
+            std.mem.swap(usize, &shape.dims[normalized_a], &shape.dims[normalized_b]);
             return self.addNode(
-                .{ .view = .{ .transpose = .{ .axis_a = axis_a, .axis_b = axis_b } } },
+                .{ .view = .{ .transpose = .{
+                    .axis_a = @intCast(normalized_a),
+                    .axis_b = @intCast(normalized_b),
+                } } },
                 &.{tensor},
                 tensor.dtype,
                 shape,
             );
+        }
+
+        pub fn reshape(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime extents: []const usize,
+        ) ValueType {
+            if (extents.len > limits.max_rank) @compileError("reshape exceeds definition max_rank");
+            for (extents) |extent| {
+                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
+            }
+            const shape = Tensor.Shape(limits.max_rank).init(extents);
+            if (shape.elementCount() != tensor.shape.elementCount()) {
+                @compileError("reshape must preserve the tensor element count");
+            }
+            return self.addNode(.{ .view = .reshape }, &.{tensor}, tensor.dtype, shape);
+        }
+
+        pub fn broadcastTo(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime extents: []const usize,
+        ) ValueType {
+            if (extents.len > limits.max_rank) @compileError("broadcast target exceeds definition max_rank");
+            if (tensor.shape.rank > extents.len) @compileError("broadcast target rank cannot be smaller than its source rank");
+            for (extents) |extent| {
+                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
+            }
+            const rank_offset = extents.len - tensor.shape.rank;
+            for (tensor.shape.slice(), 0..) |source_extent, source_axis| {
+                const target_extent = extents[rank_offset + source_axis];
+                if (source_extent != 1 and source_extent != target_extent) {
+                    @compileError("broadcast source extent must equal its target or be one");
+                }
+            }
+            const shape = Tensor.Shape(limits.max_rank).init(extents);
+            return self.addNode(.{ .view = .broadcast }, &.{tensor}, tensor.dtype, shape);
+        }
+
+        pub fn flatten(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime options: FlattenOptions,
+        ) ValueType {
+            const start_axis = normalizeAxis(tensor.shape.rank, options.start_axis);
+            const end_axis = normalizeAxis(tensor.shape.rank, options.end_axis);
+            if (start_axis > end_axis) @compileError("flatten start_axis must not follow end_axis");
+
+            var shape = Tensor.Shape(limits.max_rank){ .rank = 0, .dims = @splat(0) };
+            for (tensor.shape.slice()[0..start_axis]) |extent| {
+                shape.dims[shape.rank] = extent;
+                shape.rank += 1;
+            }
+            var flattened_extent: usize = 1;
+            for (tensor.shape.slice()[start_axis .. end_axis + 1]) |extent| flattened_extent *= extent;
+            shape.dims[shape.rank] = flattened_extent;
+            shape.rank += 1;
+            for (tensor.shape.slice()[end_axis + 1 ..]) |extent| {
+                shape.dims[shape.rank] = extent;
+                shape.rank += 1;
+            }
+
+            return self.addNode(.{ .view = .{ .flatten = .{
+                .start_axis = @intCast(start_axis),
+                .end_axis = @intCast(end_axis),
+            } } }, &.{tensor}, tensor.dtype, shape);
+        }
+
+        pub fn squeeze(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
+            const normalized = normalizeAxis(tensor.shape.rank, axis);
+            if (tensor.shape.at(normalized) != 1) @compileError("squeeze axis must have extent one");
+
+            var shape = tensor.shape;
+            var current = normalized;
+            while (current + 1 < shape.rank) : (current += 1) {
+                shape.dims[current] = shape.dims[current + 1];
+            }
+            shape.rank -= 1;
+            shape.dims[shape.rank] = 0;
+            return self.addNode(.{ .view = .{ .squeeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
+        }
+
+        pub fn unsqueeze(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
+            if (tensor.shape.rank == limits.max_rank) @compileError("unsqueeze exceeds definition max_rank");
+            const normalized = normalizeInsertionAxis(tensor.shape.rank, axis);
+            var shape = tensor.shape;
+            var current = shape.rank;
+            while (current > normalized) : (current -= 1) {
+                shape.dims[current] = shape.dims[current - 1];
+            }
+            shape.dims[normalized] = 1;
+            shape.rank += 1;
+            return self.addNode(.{ .view = .{ .unsqueeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
+        }
+
+        pub fn permute(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime axes: []const i8,
+        ) ValueType {
+            if (axes.len != tensor.shape.rank) @compileError("permute requires one axis for every input dimension");
+            var current_axes: [limits.max_rank]usize = undefined;
+            var target_axes: [limits.max_rank]usize = undefined;
+            for (0..tensor.shape.rank) |axis| current_axes[axis] = axis;
+            for (axes, 0..) |axis, index| {
+                const normalized = normalizeAxis(tensor.shape.rank, axis);
+                for (target_axes[0..index]) |previous| {
+                    if (previous == normalized) @compileError("permute axes must be unique");
+                }
+                target_axes[index] = normalized;
+            }
+
+            var result = tensor;
+            for (target_axes[0..tensor.shape.rank], 0..) |target_axis, output_axis| {
+                var current_position = output_axis;
+                while (current_axes[current_position] != target_axis) : (current_position += 1) {}
+                if (current_position == output_axis) continue;
+                result = self.transpose(result, @intCast(output_axis), @intCast(current_position));
+                std.mem.swap(usize, &current_axes[output_axis], &current_axes[current_position]);
+            }
+            return result;
+        }
+
+        pub fn slice(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime options: SliceOptions,
+        ) ValueType {
+            const axis = normalizeAxis(tensor.shape.rank, options.axis);
+            const extent = tensor.shape.at(axis);
+            const end = options.end orelse extent;
+            if (options.step == 0) @compileError("slice step must be greater than zero");
+            if (options.start >= end or end > extent) {
+                @compileError("slice bounds must select a non-empty range within the axis");
+            }
+            const length = (end - options.start + options.step - 1) / options.step;
+            var shape = tensor.shape;
+            shape.dims[axis] = length;
+            return self.addNode(.{ .view = .{ .slice = .{
+                .axis = @intCast(axis),
+                .start = options.start,
+                .length = length,
+                .step = options.step,
+            } } }, &.{tensor}, tensor.dtype, shape);
         }
 
         pub fn output(self: *Self, comptime value: ValueType) void {
@@ -171,6 +394,9 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             comptime shape_extents: []const usize,
         ) ValueType {
             if (shape_extents.len > limits.max_rank) @compileError("source shape exceeds definition max_rank");
+            for (shape_extents) |extent| {
+                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
+            }
             if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
 
             const source_index: usize = @intCast(@intFromEnum(source_key));
@@ -235,6 +461,66 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             return value;
         }
     };
+}
+
+fn reductionAttrs(comptime tensor: anytype, comptime spec: anytype) Op.Compute.ReductionAttrs {
+    const Spec = @TypeOf(spec);
+    const info = @typeInfo(Spec);
+    if (info == .int or info == .comptime_int) {
+        return .{ .axes = axisMask(tensor.shape.rank, spec) };
+    }
+    if (info != .@"struct" or !@hasField(Spec, "axes")) {
+        @compileError("reduction expects an axis or options containing axes and optional keep_dims");
+    }
+
+    const keep_dims = if (@hasField(Spec, "keep_dims")) spec.keep_dims else false;
+    const axes_mask = reductionAxesMask(tensor.shape.rank, spec.axes);
+    return .{ .axes = axes_mask, .keep_dims = keep_dims };
+}
+
+fn reductionAxesMask(comptime rank: usize, comptime axes_spec: anytype) u64 {
+    return switch (@typeInfo(@TypeOf(axes_spec))) {
+        .optional => if (axes_spec) |axes| explicitAxesMask(rank, axes) else allAxesMask(rank),
+        .null => allAxesMask(rank),
+        .pointer, .array => explicitAxesMask(rank, axes_spec),
+        else => @compileError("reduction axes must be a slice, array, or null"),
+    };
+}
+
+fn explicitAxesMask(comptime rank: usize, comptime axes: anytype) u64 {
+    if (axes.len == 0) @compileError("reduction axes cannot be empty");
+    var result: u64 = 0;
+    for (axes) |axis| {
+        const mask = axisMask(rank, axis);
+        if (result & mask != 0) @compileError("reduction axes must be unique");
+        result |= mask;
+    }
+    return result;
+}
+
+fn allAxesMask(comptime rank: usize) u64 {
+    if (rank == 0 or rank > 64) @compileError("reductions support tensor ranks from 1 through 64");
+    return if (rank == 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(rank)) - 1;
+}
+
+fn axisMask(comptime rank: usize, comptime requested_axis: anytype) u64 {
+    if (rank == 0 or rank > 64) @compileError("reductions support tensor ranks from 1 through 64");
+    return @as(u64, 1) << @intCast(normalizeAxis(rank, requested_axis));
+}
+
+fn normalizeAxis(comptime rank: usize, comptime requested_axis: anytype) usize {
+    if (rank == 0) @compileError("cannot select an axis from a rank-zero tensor");
+    const axis: isize = @intCast(requested_axis);
+    const normalized = if (axis < 0) axis + @as(isize, @intCast(rank)) else axis;
+    if (normalized < 0 or normalized >= rank) @compileError("axis is outside the input rank");
+    return @intCast(normalized);
+}
+
+fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: anytype) usize {
+    const axis: isize = @intCast(requested_axis);
+    const normalized = if (axis < 0) axis + @as(isize, @intCast(rank + 1)) else axis;
+    if (normalized < 0 or normalized > rank) @compileError("insertion axis is outside the output rank");
+    return @intCast(normalized);
 }
 
 fn enumCapacity(comptime Enum: type) usize {

@@ -35,6 +35,17 @@ pub fn GraphBackend(
                         const inserted = graph.insertTensor(info);
                         if (inserted != tensor_id) @compileError("definition tensor order was not preserved");
                     },
+                    .literal => |value| {
+                        const info: TensorInfo = .{
+                            .dtype = record.value.dtype,
+                            .shape = shape,
+                            .origin = .{ .literal = value },
+                            .layout = .contiguous(shape),
+                            .storage_tensor = tensor_id,
+                        };
+                        const inserted = graph.insertTensor(info);
+                        if (inserted != tensor_id) @compileError("definition tensor order was not preserved");
+                    },
                     .node => |node_id| {
                         const node = definition.nodes[node_id];
                         const InputInfos = [node.input_count]TensorInfo;
@@ -58,7 +69,7 @@ pub fn GraphBackend(
                                 .storage_tensor = tensor_id,
                             },
                             .view => |view| blk: {
-                                const result = layout_ops.infer(view, &input_infos, capacity.max_rank);
+                                const result = layout_ops.infer(view, &input_infos, shape, capacity.max_rank);
                                 break :blk .{
                                     .dtype = record.value.dtype,
                                     .shape = result.shape,
@@ -105,8 +116,9 @@ pub fn GraphBackend(
             return switch (op) {
                 .matmul => matmulLayout(graph, input_ids[0], input_ids[1], shape),
                 .relu, .exp, .softmax => preserveBatchLayout(graph, input_ids[0], shape),
-                .add, .sub => preserveBatchLayout(graph, input_ids[0], shape),
-                .sum => .contiguous(shape),
+                .add, .sub, .mul, .div => preserveBatchLayout(graph, input_ids[0], shape),
+                .sum, .mean, .min, .max => .contiguous(shape),
+                .concat => .contiguous(shape),
             };
         }
 
@@ -166,6 +178,7 @@ pub fn GraphBackend(
             const can_relayout = switch (lhs.origin) {
                 .source => |source_id| graph.sources[source_id].?.kind == .input,
                 .node => lhs.storage_tensor == lhs_id,
+                .literal => false,
             };
             if (!can_relayout) return .contiguous(shape);
 
@@ -185,7 +198,7 @@ pub fn GraphBackend(
             if (rhs.shape.rank != 2 or rhs.storage_tensor != rhs_id) return;
             const source_id = switch (rhs.origin) {
                 .source => |id| id,
-                .node => return,
+                .node, .literal => return,
             };
             switch (graph.sources[source_id].?.kind) {
                 .parameter, .constant => rhs.layout = .firstAxisContiguous(rhs.shape),

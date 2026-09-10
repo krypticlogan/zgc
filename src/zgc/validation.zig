@@ -69,6 +69,13 @@ pub fn shapesBroadcast(lhs: anytype, rhs: anytype) bool {
     return true;
 }
 
+pub fn reductionAxesAreValid(value: anytype, comptime axes: u64) bool {
+    const rank = rankOf(value);
+    if (axes == 0 or rank > 64) return false;
+    if (rank == 64) return true;
+    return axes < (@as(u64, 1) << @intCast(rank));
+}
+
 pub fn extentsMatch(
     lhs: anytype,
     comptime lhs_axis: usize,
@@ -168,5 +175,15 @@ pub fn requireAxis(
 ) void {
     if (!axisIsValid(value, axis)) {
         @compileError(operation ++ " axis is outside the input rank");
+    }
+}
+
+pub fn requireReductionAxes(
+    comptime operation: []const u8,
+    value: anytype,
+    comptime axes: u64,
+) void {
+    if (!reductionAxesAreValid(value, axes)) {
+        @compileError(operation ++ " requires one or more unique axes within the input rank");
     }
 }

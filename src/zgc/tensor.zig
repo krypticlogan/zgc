@@ -1,5 +1,6 @@
 const std = @import("std");
 const Dtype = @import("dtype.zig").Dtype;
+const ScalarValue = @import("dtype.zig").ScalarValue;
 
 pub const Id = usize;
 pub const Shape_T = []const usize;
@@ -677,6 +678,7 @@ pub const Source = struct {
 pub const Origin = union(enum) {
     source: Id,
     node: Id,
+    literal: ScalarValue,
 };
 
 /// Tensor metadata specialized for one graph's maximum rank.

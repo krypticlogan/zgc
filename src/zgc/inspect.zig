@@ -254,6 +254,19 @@ fn writeTensorInfo(writer: *Writer, id: Tensor.Id, info: anytype) Writer.Error!v
     switch (info.origin) {
         .node => |node| try writer.print(" producer=n{d}\n", .{node}),
         .source => |source| try writer.print(" source={d}\n", .{source}),
+        .literal => |value| {
+            try writer.writeAll(" literal=");
+            try writeScalarValue(writer, value);
+            try writer.writeByte('\n');
+        },
+    }
+}
+
+fn writeScalarValue(writer: *Writer, value: @import("dtype.zig").ScalarValue) Writer.Error!void {
+    switch (value.data_type) {
+        .f32 => try writer.print("f32({d})", .{value.get(.f32)}),
+        .f16 => try writer.print("f16({d})", .{value.get(.f16)}),
+        .i8 => try writer.print("i8({d})", .{value.get(.i8)}),
     }
 }
 
@@ -273,11 +286,17 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
             .exp => try writer.writeAll("exp"),
             .add => try writer.writeAll("add"),
             .sub => try writer.writeAll("sub"),
+            .mul => try writer.writeAll("mul"),
+            .div => try writer.writeAll("div"),
             .matmul => |plan| try writer.print(
                 "matmul({s})",
                 .{@tagName(plan.strategy)},
             ),
-            .sum => |attrs| try writer.print("sum(axis={d})", .{attrs.axis}),
+            .sum => |attrs| try writeReduction(writer, "sum", attrs),
+            .mean => |attrs| try writeReduction(writer, "mean", attrs),
+            .min => |attrs| try writeReduction(writer, "min", attrs),
+            .max => |attrs| try writeReduction(writer, "max", attrs),
+            .concat => |attrs| try writer.print("concat(axis={d})", .{attrs.axis}),
             .softmax => |attrs| try writer.print("softmax(axis={d})", .{attrs.axis}),
         },
         .view => |view| switch (view) {
@@ -285,8 +304,32 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
                 "transpose(axes={d},{d})",
                 .{ attrs.axis_a, attrs.axis_b },
             ),
+            .reshape => try writer.writeAll("reshape"),
+            .flatten => |attrs| try writer.print(
+                "flatten(axes={d}..{d})",
+                .{ attrs.start_axis, attrs.end_axis },
+            ),
+            .squeeze => |attrs| try writer.print("squeeze(axis={d})", .{attrs.axis}),
+            .unsqueeze => |attrs| try writer.print("unsqueeze(axis={d})", .{attrs.axis}),
+            .slice => |attrs| try writer.print(
+                "slice(axis={d}, start={d}, length={d}, step={d})",
+                .{ attrs.axis, attrs.start, attrs.length, attrs.step },
+            ),
+            .broadcast => try writer.writeAll("broadcast"),
         },
     }
+}
+
+fn writeReduction(writer: *Writer, name: []const u8, attrs: Op.Compute.ReductionAttrs) Writer.Error!void {
+    try writer.print("{s}(axes=[", .{name});
+    var first = true;
+    for (0..64) |axis| {
+        if (attrs.axes & (@as(u64, 1) << @intCast(axis)) == 0) continue;
+        if (!first) try writer.writeByte(',');
+        try writer.print("{d}", .{axis});
+        first = false;
+    }
+    try writer.print("], keep_dims={any})", .{attrs.keep_dims});
 }
 
 fn writeTensorTree(
@@ -314,6 +357,12 @@ fn writeTensorTree(
         .source => |source_index| {
             const source = graph.sources[source_index].?;
             try writer.print(" (source[{d}])={s}\n", .{ source_index, @tagName(source.kind) });
+            return;
+        },
+        .literal => |value| {
+            try writer.writeAll(" (literal=");
+            try writeScalarValue(writer, value);
+            try writer.writeAll(")\n");
             return;
         },
     };

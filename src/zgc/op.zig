@@ -17,12 +17,22 @@ pub const Op = union(enum) {
         exp,
         add,
         sub,
+        mul,
+        div,
         matmul: MatmulAttrs,
-        sum: SumAttrs,
+        sum: ReductionAttrs,
+        mean: ReductionAttrs,
+        min: ReductionAttrs,
+        max: ReductionAttrs,
+        concat: ConcatAttrs,
         softmax: SoftmaxAttrs,
 
-        pub const SumAttrs = struct { axis: i8 };
+        pub const ReductionAttrs = struct {
+            axes: u64,
+            keep_dims: bool = false,
+        };
         pub const SoftmaxAttrs = struct { axis: i8 };
+        pub const ConcatAttrs = struct { axis: i8 };
         pub const MatmulAttrs = Matmul.Plan;
 
         pub fn execute(
@@ -39,8 +49,21 @@ pub const Op = union(enum) {
                 .exp => inferFloatUnaryRank("exp", inputs),
                 .add => inferAddRank(inputs),
                 .sub => inferBinaryElementwiseRank("sub", inputs),
+                .mul => inferBinaryElementwiseRank("mul", inputs),
+                .div => blk: {
+                    const rank = inferBinaryElementwiseRank("div", inputs);
+                    validation.requireDtypeKind("div", inputs[0], .float);
+                    break :blk rank;
+                },
                 .matmul => inferMatmulRank(inputs),
-                .sum => |attrs| inferReductionRank("sum", inputs, attrs.axis),
+                .sum => |attrs| inferReductionRank("sum", inputs, attrs),
+                .mean => |attrs| blk: {
+                    validation.requireDtypeKind("mean", inputs[0], .float);
+                    break :blk inferReductionRank("mean", inputs, attrs);
+                },
+                .min => |attrs| inferReductionRank("min", inputs, attrs),
+                .max => |attrs| inferReductionRank("max", inputs, attrs),
+                .concat => |attrs| inferConcatRank(inputs, attrs.axis),
                 .softmax => |attrs| blk: {
                     const rank = inferFloatUnaryRank("softmax", inputs);
                     validation.requireAxis("softmax", inputs[0], attrs.axis);
@@ -62,13 +85,20 @@ pub const Op = union(enum) {
                 },
                 .add => inferAddShape(inputs, max_rank),
                 .sub => inferBinaryElementwiseShape("sub", inputs, max_rank),
+                .mul => inferBinaryElementwiseShape("mul", inputs, max_rank),
+                .div => blk: {
+                    validation.requireDtypeKind("div", inputs[0], .float);
+                    break :blk inferBinaryElementwiseShape("div", inputs, max_rank);
+                },
                 .matmul => inferMatmulShape(inputs, max_rank),
-                .sum => |attrs| inferReductionShape(
-                    "sum",
-                    inputs,
-                    attrs.axis,
-                    max_rank,
-                ),
+                .sum => |attrs| inferReductionShape("sum", inputs, attrs, max_rank),
+                .mean => |attrs| blk: {
+                    validation.requireDtypeKind("mean", inputs[0], .float);
+                    break :blk inferReductionShape("mean", inputs, attrs, max_rank);
+                },
+                .min => |attrs| inferReductionShape("min", inputs, attrs, max_rank),
+                .max => |attrs| inferReductionShape("max", inputs, attrs, max_rank),
+                .concat => |attrs| inferConcatShape(inputs, attrs.axis, max_rank),
                 .softmax => |attrs| blk: {
                     _ = inferFloatUnaryRank("softmax", inputs);
                     const shape = inferUnaryShape("softmax", inputs, max_rank);
@@ -81,8 +111,22 @@ pub const Op = union(enum) {
 
     pub const View = union(enum) {
         transpose: TransposeAttrs,
+        reshape,
+        flatten: FlattenAttrs,
+        squeeze: AxisAttrs,
+        unsqueeze: AxisAttrs,
+        slice: SliceAttrs,
+        broadcast,
 
         pub const TransposeAttrs = struct { axis_a: i8, axis_b: i8 };
+        pub const FlattenAttrs = struct { start_axis: i8, end_axis: i8 };
+        pub const AxisAttrs = struct { axis: i8 };
+        pub const SliceAttrs = struct {
+            axis: i8,
+            start: usize,
+            length: usize,
+            step: usize,
+        };
     };
 
     pub fn kind(op: Op) Kind {
@@ -123,28 +167,27 @@ fn inferFloatUnaryRank(comptime operation: []const u8, inputs: anytype) usize {
 fn inferReductionRank(
     comptime operation: []const u8,
     inputs: anytype,
-    comptime axis: i8,
+    comptime attrs: Op.Compute.ReductionAttrs,
 ) usize {
     const rank = inferUnaryRank(operation, inputs);
-    validation.requireAxis(operation, inputs[0], axis);
-    return rank - 1;
+    validation.requireReductionAxes(operation, inputs[0], attrs.axes);
+    return if (attrs.keep_dims) rank else rank - @popCount(attrs.axes);
 }
 
 fn inferReductionShape(
     comptime operation: []const u8,
     comptime inputs: anytype,
-    comptime axis: i8,
+    comptime attrs: Op.Compute.ReductionAttrs,
     comptime max_rank: usize,
 ) Tensor.Shape(max_rank) {
-    _ = inferReductionRank(operation, inputs, axis);
-    const removed_axis: usize = @intCast(axis);
-    var shape = inputs[0].shape;
-    var current_axis = removed_axis;
-    while (current_axis + 1 < shape.rank) : (current_axis += 1) {
-        shape.dims[current_axis] = shape.dims[current_axis + 1];
+    _ = inferReductionRank(operation, inputs, attrs);
+    var shape = Tensor.Shape(max_rank){ .rank = 0, .dims = @splat(0) };
+    for (inputs[0].shape.slice(), 0..) |extent, axis| {
+        const reduced = attrs.axes & (@as(u64, 1) << @intCast(axis)) != 0;
+        if (reduced and !attrs.keep_dims) continue;
+        shape.dims[shape.rank] = if (reduced) 1 else extent;
+        shape.rank += 1;
     }
-    shape.rank -= 1;
-    shape.dims[shape.rank] = 0;
     return shape;
 }
 
@@ -155,6 +198,37 @@ fn inferBinaryElementwiseRank(
     validation.requireInputCount(operation, inputs, 2);
     validation.requireMatchingDtypes(operation, inputs);
     return @max(validation.rankOf(inputs[0]), validation.rankOf(inputs[1]));
+}
+
+fn inferConcatRank(inputs: anytype, comptime axis: i8) usize {
+    if (inputs.len == 0) @compileError("concat requires at least one input");
+    validation.requireMatchingRanks("concat", inputs);
+    validation.requireMatchingDtypes("concat", inputs);
+    validation.requireAxis("concat", inputs[0], axis);
+    return validation.rankOf(inputs[0]);
+}
+
+fn inferConcatShape(
+    comptime inputs: anytype,
+    comptime axis: i8,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    const rank = inferConcatRank(inputs, axis);
+    const concat_axis: usize = @intCast(axis);
+    var result = inputs[0].shape;
+    var concat_extent: usize = 0;
+    for (inputs) |input| {
+        for (0..rank) |current_axis| {
+            if (current_axis == concat_axis) continue;
+            if (input.shape.at(current_axis) != inputs[0].shape.at(current_axis)) {
+                @compileError("concat input extents must match outside the concatenation axis");
+            }
+        }
+        concat_extent = std.math.add(usize, concat_extent, input.shape.at(concat_axis)) catch
+            @compileError("concat axis extent exceeds usize");
+    }
+    result.dims[concat_axis] = concat_extent;
+    return result;
 }
 
 fn inferBinaryElementwiseShape(

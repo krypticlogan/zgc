@@ -17,7 +17,7 @@ pub fn CountingBackend(comptime Definition: type) type {
                     .source => |source_index| {
                         capacity.max_sources = @max(capacity.max_sources, source_index + 1);
                     },
-                    .node => {},
+                    .node, .literal => {},
                 }
             }
             return capacity;

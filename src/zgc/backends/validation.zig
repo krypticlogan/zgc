@@ -1,6 +1,7 @@
 const std = @import("std");
 const Graph = @import("../graph.zig");
 const Tensor = @import("../tensor.zig");
+const layout_ops = @import("../kernels/layout.zig");
 
 /// Validates the fully lowered graph before model types and executable kernels
 /// are instantiated. Kernels may rely on these contracts without repeating
@@ -19,14 +20,30 @@ pub fn ValidationBackend(comptime capacity: Graph.Capacity) type {
                 }
 
                 switch (node.op) {
-                    .view => {},
+                    .view => |view| {
+                        const expected = layout_ops.infer(view, &inputs, output.shape, capacity.max_rank);
+                        if (!std.mem.eql(usize, expected.shape.slice(), output.shape.slice()) or
+                            expected.layout.offset != output.layout.offset or
+                            !std.mem.eql(
+                                isize,
+                                expected.layout.strides[0..output.shape.rank],
+                                output.layout.strides[0..output.shape.rank],
+                            ) or expected.storage_tensor != output.storage_tensor)
+                        {
+                            @compileError("lowered view metadata does not match its inferred alias");
+                        }
+                        if (output.dtype != inputs[0].dtype) {
+                            @compileError("view output dtype does not match its input dtype");
+                        }
+                    },
                     .compute => |compute| {
                         const expected_shape = compute.inferShape(&inputs, capacity.max_rank);
                         if (!std.mem.eql(usize, expected_shape.slice(), output.shape.slice())) {
                             @compileError("lowered operation output shape does not match its inferred shape");
                         }
-                        if (output.dtype != inputs[0].dtype) {
-                            @compileError("lowered operation output dtype does not match its input dtype");
+                        const expected_dtype = inputs[0].dtype;
+                        if (output.dtype != expected_dtype) {
+                            @compileError("lowered operation output dtype does not match its inferred dtype");
                         }
                         switch (compute) {
                             .matmul => |plan| validateMatmulPlan(plan.strategy, inputs[0], inputs[1], output),

@@ -2,11 +2,19 @@ const std = @import("std");
 const Graph = @import("graph.zig");
 const Storage = @import("storage.zig");
 const Tensor = @import("tensor.zig");
+const ScalarValue = @import("dtype.zig").ScalarValue;
 
 fn EmbeddedStorage(comptime bytes: []const u8, comptime alignment: usize) type {
     const contents = bytes;
     return struct {
         const storage: [contents.len]u8 align(alignment) = contents[0..].*;
+    };
+}
+
+fn LiteralStorage(comptime value: ScalarValue) type {
+    const T = value.dtype().Scalar();
+    return struct {
+        const storage: [1]T = .{value.get(value.dtype())};
     };
 }
 
@@ -249,7 +257,7 @@ pub fn Model(
                 .bound => blk: {
                     const source_id = switch (info.origin) {
                         .source => |id| id,
-                        .node => unreachable,
+                        .node, .literal => unreachable,
                     };
                     const bytes = model.bound_sources[source_id] orelse
                         @panic("runtime input has not been bound");
@@ -268,6 +276,10 @@ pub fn Model(
                         .physical => EmbeddedStorage(embedded.bytes, @alignOf(T)),
                     };
                     break :blk &Embedded.storage;
+                },
+                .literal => |value| blk: {
+                    const Literal = LiteralStorage(value);
+                    break :blk std.mem.asBytes(&Literal.storage);
                 },
             };
         }

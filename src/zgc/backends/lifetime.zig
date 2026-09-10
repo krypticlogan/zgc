@@ -38,6 +38,10 @@ pub fn LifetimeAnalysis() type {
                         .begin_node = node_id,
                         .end_node_exclusive = node_id + 1,
                     },
+                    .literal => .{
+                        .begin_node = 0,
+                        .end_node_exclusive = null,
+                    },
                 };
             }
 

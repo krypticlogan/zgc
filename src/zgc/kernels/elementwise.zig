@@ -292,3 +292,27 @@ pub fn sub(a: anytype, b: anytype, output: anytype) void {
         }
     });
 }
+
+pub fn mul(a: anytype, b: anytype, output: anytype) void {
+    binary(a, b, output, struct {
+        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
+            return a_value * b_value;
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
+            return a_vec * b_vec;
+        }
+    });
+}
+
+pub fn div(a: anytype, b: anytype, output: anytype) void {
+    binary(a, b, output, struct {
+        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
+            return a_value / b_value;
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
+            return a_vec / b_vec;
+        }
+    });
+}
