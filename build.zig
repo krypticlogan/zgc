@@ -2,16 +2,6 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // embed params generator
-    const gen = b.addExecutable(.{
-        .name = "embed_helper",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("embed_helper/embeddings_gen.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(gen);
 
     // library
     const zgc_mod = b.addModule("zgc", .{
@@ -42,7 +32,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_root_mod.addImport("embed_params", test_embed_params);
 
     const test_mod = b.addModule("zgc_tests", .{
         .root_source_file = b.path("tests/tests.zig"),
@@ -50,14 +39,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const embedding_codegen_mod = b.createModule(.{
-        .root_source_file = b.path("embed_helper/embedding.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     test_mod.addImport("zgc", test_root_mod);
-    test_mod.addImport("embedding_codegen", embedding_codegen_mod);
     test_mod.addImport("embed_params", test_embed_params);
 
     const tests = b.addTest(.{

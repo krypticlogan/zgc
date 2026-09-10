@@ -1,6 +1,5 @@
 test {
     _ = @import("network.zig");
-    _ = @import("meta.zig");
     _ = @import("definition.zig");
     _ = @import("model.zig");
     _ = @import("inspect.zig");
