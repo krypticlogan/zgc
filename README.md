@@ -36,16 +36,6 @@ See [development state](docs/development-state.md) for precise limitations and
 
 #### *Note that this library is currently in active development and not entirely stable. The API may change without notice.*
 
-## Examples of ZGC graphs in use
-
-### Conway's Game of Life
-
-https://github.com/user-attachments/assets/4764d198-9650-4db1-b541-27d46fec85e2
-
-### MNIST digit classifier
-
-https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
-
 ## Installation & usage
 
 In a Zig project directory:
@@ -211,6 +201,17 @@ zig build benchmark -Dop=matmul-rhs-strided -Doptimize=ReleaseFast
 
 See the [benchmark dashboard](benchmarks/README.md) for selectors, methodology,
 and recorded results.
+
+## Examples of ZGC graphs in use
+
+### Conway's Game of Life
+
+https://github.com/user-attachments/assets/4764d198-9650-4db1-b541-27d46fec85e2
+
+### MNIST digit classifier
+
+https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
+
 
 ## Repository layout
 
