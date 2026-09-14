@@ -1,8 +1,11 @@
 # Zig Graph Compiler
 
-ZGC is an allocation-free inference graph compiler for Zig. A model
-architecture is defined at compile time, lowered to a fixed execution graph,
-assigned an inline memory plan, and emitted as a specialized Zig type.
+ZGC is an allocation-free ahead-of-time tensor computation graph compiler written in Zig.  
+A graph architecture is defined at compile time,  
+lowered and optimized to a fixed execution graph,  
+assigned an inline memory plan,  
+and emitted as a specialized Zig type.  
+  
 The binary is the model: graph traversal, tensor ranks, shapes, dtypes, layouts,
 and kernel selection are compile-time-known.
 
@@ -10,25 +13,24 @@ The project targets Zig 0.16.0.
 
 ## Capabilities
 
-- Typed, front-facing `DefinitionBackend` with enum-indexed sources.
-- Counting, graph-lowering, and validation passes through `definition.model()`.
-- Exact graph capacities derived from user-configurable definition bounds.
+- Front-facing `DefinitionBackend` with enum-indexed sources.
+- `definition.model()` for generating the graph, complete with validation and lowering.
+- Exact graph capacities derived directly from the model.
 - Lifetime-planned, reusable inline model memory with no heap allocation during
   execution.
-- Static-geometry model views and dynamic low-level views for contiguous,
-  offset, broadcast, transposed, and generally strided layouts.
 - Multiple graph inputs, parameters, constants, and outputs.
 - Source-free scalar literals and storage-efficient zero-stride filled tensors.
 - `f32`, `f16`, `i8`, and strict boolean tensor dtypes.
 - Unary math, arithmetic, comparison, logical, selection, matmul, reduction,
   softmax, and concatenation operations.
 - Explicit copy and row-major contiguous materialization.
-- Constant padding and zero-copy overlapping windows over trailing axes.
+- Zero-copy overlapping windows over views.
+- Static-geometry model views and dynamic low-level views for contiguous,
+  offset, broadcast, transposed, and generally strided layouts.
 - Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.
 - Trailing-axis broadcasting for binary arithmetic and compile-time single- or multi-axis reductions.
 - SIMD fast paths for contiguous kernels and generic strided traversal.
-- Core-backed dense and sequential graph layers through `zgc.nn`.
-- Rank-4 image input conventions through `zgc.img`.
+- Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 
 See [development state](docs/development-state.md) for precise limitations and
