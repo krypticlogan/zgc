@@ -19,34 +19,58 @@ The project targets Zig 0.16.0.
   offset, broadcast, transposed, and generally strided layouts.
 - Multiple graph inputs, parameters, constants, and outputs.
 - Source-free scalar literals and storage-efficient zero-stride filled tensors.
-- `f32`, `f16`, and `i8` tensor metadata and elementwise kernels where valid.
-- ReLU, exp, add, sub, mul, div, matmul, sum, mean, min, max, softmax, and concatenation compute operations.
+- `f32`, `f16`, `i8`, and strict boolean tensor dtypes.
+- Unary math, arithmetic, comparison, logical, selection, matmul, reduction,
+  softmax, and concatenation operations.
+- Explicit copy and row-major contiguous materialization.
+- Constant padding and zero-copy overlapping windows over trailing axes.
 - Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.
 - Trailing-axis broadcasting for binary arithmetic and compile-time single- or multi-axis reductions.
 - SIMD fast paths for contiguous kernels and generic strided traversal.
 - Core-backed dense and sequential graph layers through `zgc.nn`.
 - Rank-4 image input conventions through `zgc.img`.
-- Operation and generated-model benchmarks, plus a standalone sandbox package.
+- Operation and generated-model benchmarks, plus standalone example packages.
 
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
 
-#### *Note that this library is currently in active development and not fully tested. As such, it is not recommended for use in critical software. Use with caution and if you run into any issues during usage, make me aware and I'll do my best to get it fixed.*
+#### *Note that this library is currently in active development and not entirely stable. The API may change without notice.*
+
+## Installation & usage
+
+In a Zig project directory:
+```bash
+zig fetch --save git+https://github.com/krypticlogan/zgc
+```
+
+Add to your build.zig:
+```zig
+const zgc_dep = b.dependency("zgc", .{
+    .target = target,
+    .optimize = optimize,
+});
+const zgc_mod = zgc_dep.module("zgc");
+```
+Then, add the module as an import to your own module.
+```zig
+exe.root_module.addImport("zgc", zgc_mod);
+```
+Finally, you may import the zgc module to your own.
 
 ## Defining a model
 
-`DefinitionBackend` is the model-building surface. Source keys and tensor
-values are concrete types; user code does not run separately against counting
+`DefinitionBackend` is the public model-building surface. Source keys and tensor
+values are concrete types. User code does not run separately against counting
 and graph builders.
 
 ```zig
 const std = @import("std");
 const zgc = @import("zgc");
 
-const Sources = enum(usize) { input, weights };
+const Sources = enum(usize) { input, weights }; // user-defined source keys
 const Definition = zgc.DefinitionBackend(Sources, .{ .max_rank = 2 });
 
-fn define(builder: *Definition) void {
+fn define(builder: *Definition) void { // complete graph architecture is defined here
     const input = builder.input(.input, .f32, &.{ 4, 8 });
     const weights = builder.parameter(.weights, .f32, &.{ 8, 16 });
     builder.output(builder.relu(builder.matmul(input, weights)));
@@ -58,7 +82,7 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const MyModel = definition.model();
+const MyModel = definition.model(); // graph is constructed and lowered to a specialized Zig type
 
 pub fn main() !void {
     var model = MyModel.init();
@@ -75,11 +99,13 @@ pub fn main() !void {
 ```
 
 Definition limits have defaults and may be overridden at compile time. These
-are front-end bounds, not final allocation sizes. The counting pass derives the
+are **front-end bounds, not final allocation sizes**. The counting pass derives the
 exact node, tensor, reference, output, source, and rank capacities before graph
 construction and memory planning.
 
-## Neural-network layers
+## Domain extensions
+
+### Neural-network layers
 
 `zgc.nn` composes higher-level layers through `DefinitionBackend`; it does not
 provide a separate tensor runtime.
@@ -98,6 +124,8 @@ builder.output(Classifier.apply(builder, input));
 Dense weights use logical `[input, output]` storage by default. Set
 `.weight_layout = .output_input` for sources stored as `[output, input]`; the
 layer adds an aliasing transpose before matmul.
+
+### Image-processing pipelines
 
 `zgc.img.Dimensions` defines channel-first or channel-last rank-4 shapes, and
 `zgc.img.input` declares a core graph input with that convention.
@@ -154,8 +182,8 @@ zig build test
 zig build check
 ```
 
-The package exports a module named `zgc`. The [sandbox](sandbox/README.md) shows
-how a separate Zig package consumes it through `b.dependency("zgc", ...)`.
+The package exports a module named `zgc`. The [examples](examples/) show how
+separate Zig packages consume it through `b.dependency("zgc", ...)`.
 
 ## Benchmarks
 
@@ -186,7 +214,7 @@ and recorded results.
 | `src/extensions/` | Core-backed domain abstractions exported as `zgc.nn` and `zgc.img` |
 | `tests/` | Compile-time graph, runtime model, validation, view, and kernel coverage |
 | `benchmarks/` | Operation and generated-model benchmark harness, with recorded results |
-| `sandbox/` | Standalone model definitions, interactive inference, inspection, and artifact analysis |
+| `examples/` | Standalone model definitions, interactive applications, inspection, and artifact analysis |
 | `docs/` | Architecture, design constraints, capabilities, and limitations |
 
 ## Documentation
@@ -197,5 +225,6 @@ and recorded results.
 - [Model inspection](docs/inspection.md)
 - [Generated model artifacts](docs/model-artifacts.md)
 - [Development state](docs/development-state.md)
-- [Sandbox and binary inspection](sandbox/README.md)
+- [MNIST digit classifier](examples/mnist-digit-classifier/README.md)
+- [Conway's Game of Life](examples/conways-game-of-life/README.md)
 - [Benchmarks](benchmarks/README.md)

@@ -5,7 +5,7 @@ values. Inputs are read-only and compute operations write a distinct output.
 View operations alias an existing storage root and execute no runtime kernel.
 
 Tensor dimensions must be positive. Operations preserve their input dtype
-unless stated otherwise.
+unless stated otherwise. Supported dtypes are `f32`, `f16`, `i8`, and `bool`.
 
 ## Scalars and filled tensors
 
@@ -20,9 +20,11 @@ trailing-axis expansion for any broadcast-compatible tensor.
 
 ## Elementwise operations
 
-`relu`, `exp`, `add`, `sub`, `mul`, and `div` operate elementwise. `exp` and
-`div` require floating-point tensors. The remaining operations support the
-implemented floating-point and signed-integer dtypes.
+`relu`, `exp`, `neg`, `abs`, `sqrt`, `log`, `reciprocal`, `add`, `sub`, `mul`,
+`div`, `minimum`, `maximum`, and `clamp` operate elementwise. `exp`, `neg`,
+`abs`, `sqrt`, `log`, `reciprocal`, and `div` require floating-point tensors.
+`relu`, arithmetic other than division, minimum, maximum, and clamp support
+the implemented numeric dtypes. Boolean tensors are not numeric.
 
 Binary operands must have matching dtypes and use trailing-axis broadcasting:
 
@@ -33,6 +35,51 @@ Binary operands must have matching dtypes and use trailing-axis broadcasting:
 
 Broadcasting is represented with zero input strides and does not materialize
 expanded operands.
+
+`minimum(lhs, rhs)` and `maximum(lhs, rhs)` are elementwise and are distinct
+from the `min` and `max` reduction operations. `clamp(value, lower, upper)`
+broadcasts all three tensors.
+
+## Comparisons, booleans, and selection
+
+`equal`, `notEqual`, `lessThan`, `lessEqual`, `greaterThan`, and
+`greaterEqual` broadcast their operands and produce a `bool` tensor. Equality
+and inequality support matching numeric or boolean operands. Ordered
+comparisons require numeric operands.
+
+`logicalNot`, `logicalAnd`, and `logicalOr` accept only boolean tensors.
+Numeric tensors have no implicit truthiness: use an explicit comparison such
+as `notEqual(value, scalar(dtype, 0))` to construct a mask.
+
+`where(condition, when_true, when_false)` requires a boolean condition and
+matching value dtypes. The condition and both value tensors use trailing-axis
+broadcasting. Its result has the dtype of the value tensors.
+
+## Materialization
+
+`copy(tensor)` writes logical tensor values into distinct storage. Lowering may
+retain a useful physical layout such as a batch-oriented layout.
+
+`contiguous(tensor)` also writes into distinct storage and requires the result
+to use logical row-major strides. Both operations preserve shape and dtype and
+can materialize transposed, sliced, or broadcast views.
+
+## Padding and windows
+
+`pad(tensor, fill, options)` materializes constant padding around every input
+axis. `fill` must be a rank-zero tensor with the input dtype. `before` and
+`after` provide one compile-time width per input axis, and the result uses
+logical row-major storage.
+
+`windows(tensor, options)` creates one overlapping view across the trailing
+axes selected by `sizes`. The corresponding `strides` and `dilations` default
+to one. For an input `[H, W]` and window sizes `[KH, KW]`, the output is
+`[OH, OW, KH, KW]`. Unwindowed leading axes remain ahead of the output-position
+axes, and the window axes are appended.
+
+Windows use valid geometry: every dilated window must fit within its input.
+Boundary behavior is expressed by padding the input first. The complete window
+tensor aliases one storage root; individual windows do not allocate storage.
 
 ## Matrix multiplication
 

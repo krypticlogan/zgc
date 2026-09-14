@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const sandbox_model_mod = b.createModule(.{
+    const classifier_model_mod = b.createModule(.{
         .root_source_file = b.path("src/digit-classifier.zig"),
         .target = target,
         .optimize = optimize,
@@ -31,14 +31,14 @@ pub fn build(b: *std.Build) void {
     const raylib_artifact = raylib_dep.artifact("raylib");
 
     const inspect_cli_mod = zgc_dep.module("zgc_inspect_cli");
-    inspect_cli_mod.addImport("model", sandbox_model_mod);
+    inspect_cli_mod.addImport("model", classifier_model_mod);
     const model_inspector = b.addExecutable(.{
         .name = "zgc-inspect",
         .root_module = inspect_cli_mod,
     });
     b.installArtifact(model_inspector);
 
-    const inspect_step = b.step("inspect", "Inspect the sandbox model");
+    const inspect_step = b.step("inspect", "Inspect the digit-classifier model");
     const inspect_cmd = b.addRunArtifact(model_inspector);
     inspect_step.dependOn(&inspect_cmd.step);
     if (b.args) |args| inspect_cmd.addArgs(args);
@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
     demo_step.dependOn(&demo_cmd.step);
 
     const model_runner_mod = zgc_dep.module("zgc_model_runner");
-    model_runner_mod.addImport("model", sandbox_model_mod);
+    model_runner_mod.addImport("model", classifier_model_mod);
     const model_exe = b.addExecutable(.{
         .name = "zgc-model",
         .root_module = model_runner_mod,

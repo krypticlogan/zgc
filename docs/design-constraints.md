@@ -62,6 +62,15 @@ in the model's mutable memory plan.
   input geometry are validated and specialized before execution.
 - Filled tensors alias one scalar storage element through zero strides. They do
   not allocate or initialize storage proportional to their logical shape.
+- `copy` and `contiguous` are compute operations with distinct output storage.
+  `copy` permits a lowering-selected physical layout; `contiguous` fixes
+  logical row-major output strides.
+- Constant padding is materialized once per padded tensor. A window operation
+  is an overlapping read-only alias with appended window axes and no separate
+  allocation for individual windows.
+- Comparisons produce boolean tensors. Logical operations and selection
+  conditions require boolean tensors; numeric values have no implicit
+  truthiness conversion.
 - `run()` executes the fixed operation list sequentially. Runtime input values
   may change between runs without rebuilding the model type.
 

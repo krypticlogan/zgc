@@ -33,7 +33,7 @@
     // internet connectivity.
     .dependencies = .{
         .zgc = .{
-            .path = "..",
+            .path = "../..",
         },
         .raylib_zig = .{
             .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#8758f4cd3a5ae0df6941c4715257223d34c5ad3e",

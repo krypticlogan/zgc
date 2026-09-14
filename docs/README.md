@@ -16,7 +16,10 @@ runtime storage, supported operations, constraints, and tooling.
 - [Development state](development-state.md) — implemented capabilities,
   limitations, and tests.
 - [Repository README](../README.md) — public API example and common commands.
-- [Sandbox](../sandbox/README.md) — model consumption, interactive inference,
-  inspection, and generated-code analysis.
+- [MNIST digit classifier](../examples/mnist-digit-classifier/README.md) —
+  embedded parameters, interactive inference, inspection, and generated-code
+  analysis.
+- [Conway's Game of Life](../examples/conways-game-of-life/README.md) — static
+  window geometry, externally managed state, and interactive rendering.
 - [Benchmarks](../benchmarks/README.md) — cases, methodology, and recorded
   results.

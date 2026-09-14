@@ -1,6 +1,6 @@
 const std = @import("std");
 const rl = @import("raylib");
-const sandbox_model = @import("digit-classifier.zig");
+const classifier = @import("digit-classifier.zig");
 
 const screen_width = 1000;
 const screen_height = 600;
@@ -17,11 +17,11 @@ pub fn main() void {
     defer rl.closeWindow();
     rl.setTargetFPS(120);
 
-    var model = sandbox_model.Model.init();
-    var canvas: [sandbox_model.input_size]f32 = @splat(0);
-    var predictions: [sandbox_model.output_size]f32 = @splat(0);
+    var model = classifier.Model.init();
+    var canvas: [classifier.input_size]f32 = @splat(0);
+    var predictions: [classifier.output_size]f32 = @splat(0);
 
-    sandbox_model.bindInput(&model, &canvas);
+    classifier.bindInput(&model, &canvas);
     updatePredictions(&model, &predictions);
 
     while (!rl.windowShouldClose()) {
@@ -57,14 +57,14 @@ pub fn main() void {
     }
 }
 
-fn paint(canvas: *[sandbox_model.input_size]f32, x: usize, y: usize, amount: f32) void {
+fn paint(canvas: *[classifier.input_size]f32, x: usize, y: usize, amount: f32) void {
     const index = y * resolution + x;
     canvas[index] = @min(canvas[index] + amount, 1.0);
 }
 
 fn updatePredictions(
-    model: *sandbox_model.Model,
-    predictions: *[sandbox_model.output_size]f32,
+    model: *classifier.Model,
+    predictions: *[classifier.output_size]f32,
 ) void {
     model.run();
     const output = model.outputView(0);
@@ -73,7 +73,7 @@ fn updatePredictions(
     }
 }
 
-fn drawCanvas(canvas: *const [sandbox_model.input_size]f32) void {
+fn drawCanvas(canvas: *const [classifier.input_size]f32) void {
     rl.drawRectangle(0, 0, canvas_width, screen_height, .black);
     for (0..resolution) |y| {
         for (0..resolution) |x| {
@@ -91,7 +91,7 @@ fn drawCanvas(canvas: *const [sandbox_model.input_size]f32) void {
     }
 }
 
-fn drawDashboard(predictions: *const [sandbox_model.output_size]f32) void {
+fn drawDashboard(predictions: *const [classifier.output_size]f32) void {
     const dashboard_x = canvas_width;
     const dashboard_width = screen_width - canvas_width;
     const bar_x = dashboard_x + 64;
@@ -133,7 +133,7 @@ fn drawDashboard(predictions: *const [sandbox_model.output_size]f32) void {
     }
 }
 
-fn bestDigit(predictions: *const [sandbox_model.output_size]f32) usize {
+fn bestDigit(predictions: *const [classifier.output_size]f32) usize {
     var best: usize = 0;
     for (predictions[1..], 1..) |probability, digit| {
         if (probability > predictions[best]) best = digit;

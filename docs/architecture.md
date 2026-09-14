@@ -79,9 +79,10 @@ dense storage. A rank-2 matmul keeps the public logical contract
 physical strides `[1, K]`, making each logical output column contiguous.
 Matmuls whose leading dimension can fill a target SIMD vector also select a
 first-axis-contiguous lhs and result layout; that result layout propagates
-through compatible add, ReLU, exp, and softmax results. Other compute results
-use row-major storage. Transpose view operations preserve their source storage
-tensor and produce an aliasing layout with adjusted shape and strides.
+through compatible unary, elementwise, comparison, logical, selection, and
+softmax results. Other compute results use row-major storage. Transpose view
+operations preserve their source storage tensor and produce an aliasing layout
+with adjusted shape and strides.
 
 The concrete graph stores fixed arrays of nodes, tensor metadata, flattened
 input references, outputs, and sources. Node order is execution order.
@@ -166,18 +167,24 @@ Kernels are grouped by family:
 | Family | Implemented operations |
 | --- | --- |
 | Literals | Rank-zero scalar values and zero-stride filled-tensor expansion |
-| Elementwise | ReLU, exp, add, sub, mul, div; trailing-axis broadcasting for binary operations |
+| Elementwise | ReLU, exp, neg, abs, sqrt, log, reciprocal, arithmetic, minimum, maximum, and clamp |
+| Predicate | Comparisons, strict boolean logic, and conditional selection |
+| Materialization | Logical copy, row-major conversion, and constant padding |
 | Contraction | Rank-2 matmul |
 | Reduction | Sum, mean, min, and max over compile-time axis sets |
 | Special | Softmax over one axis |
 | Concatenation | Materialized output with contiguous block-copy and static strided paths |
-| Layout | Compile-time transpose, permutation, reshape, flatten, squeeze, unsqueeze, and slicing inference |
+| Layout | Compile-time transpose, permutation, reshape, flatten, squeeze, unsqueeze, slicing, broadcasting, and overlapping-window inference |
 
 Binary arithmetic aligns shapes from the trailing axis. Equal extents are
 paired directly, singleton extents broadcast with zero strides, and absent
 leading axes behave as singleton dimensions. Reduction axes are normalized,
 deduplicated, and encoded at definition time. `keep_dims` retains reduced axes
 as singleton dimensions so reduction outputs can broadcast back over inputs.
+
+Comparisons return boolean tensors. Logical operations accept only boolean
+tensors, and `where` requires a boolean condition. Numeric tensors are never
+interpreted through implicit truthiness rules.
 
 Scalar literals are immutable, source-free rank-zero tensors embedded in the
 generated program. They do not reserve model memory or execute a kernel. A
@@ -190,6 +197,8 @@ axis range to be logically contiguous. General reshape currently requires a
 logically row-major contiguous source because it must preserve element order
 without copying. Permutation lowers to transpose aliases. Slicing uses
 compile-time positive bounds and steps to produce an offset strided alias.
+Windows append static neighborhood axes and may overlap within the same
+storage root.
 
 Elementwise kernels use SIMD for row-major tensors and matching dense axis
 permutations. Trailing-vector binary arithmetic also vectorizes across a contiguous first

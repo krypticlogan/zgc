@@ -1,24 +1,20 @@
 # Development state
 
 ZGC is functional but pre-release. The compile-time definition-to-model path,
-runtime execution, tests, sandbox, and operation benchmark suite are working on
-Zig 0.16.0. The API should still be expected to change.
+runtime execution, tests, examples, and operation benchmark suite are working
+on Zig 0.16.0. The API should still be expected to change.
 
 ## Implementation roadmap
 
-1. Add explicit `contiguous` and `copy` materialization with lowering-selected
-   destination layouts.
-2. Complete scalar mathematics with negation, absolute value, square root,
-   logarithm, reciprocal, elementwise min/max, and clamp.
-3. Add dtype conversion and settle boolean-mask and tensor-index dtypes.
-4. Build comparisons, conditional selection, argmin/argmax, and runtime-indexed
-   gather on those dtypes.
-5. Generalize matmul to broadcastable batch dimensions with compile-time
+1. Add dtype conversion and settle the tensor-index dtype.
+2. Build argmin/argmax and runtime-indexed gather operations.
+3. Generalize matmul to broadcastable batch dimensions with compile-time
    traversal plans.
-6. Add padding and window geometry, followed by convolution and pooling.
-7. Add graph optimization passes for constant folding, dead-node elimination,
+4. Build convolution, pooling, and specialized stencil lowering over static
+   padding and window geometry.
+5. Add graph optimization passes for constant folding, dead-node elimination,
    operation fusion, and cost-based layout selection.
-8. Introduce explicitly bounded runtime extents where they preserve static
+6. Introduce explicitly bounded runtime extents where they preserve static
    kernel specialization and memory planning.
 
 ## Implemented
@@ -45,8 +41,8 @@ Zig 0.16.0. The API should still be expected to change.
 - Rank-zero through bounded-rank shapes.
 - Contiguous layouts, offsets, arbitrary strides, negative strides, transpose
   aliases, axis slices, and broadcast views.
-- `f32`, `f16`, and `i8` dtypes with scalar/vector mappings and accumulation
-  helpers.
+- `f32`, `f16`, `i8`, and `bool` dtypes. Numeric dtypes provide scalar/vector
+  mappings and accumulation helpers; booleans remain strict predicates.
 
 ### Operations
 
@@ -55,7 +51,13 @@ Zig 0.16.0. The API should still be expected to change.
 | Scalar/full | Source-free rank-zero literals and zero-stride filled-tensor aliases |
 | ReLU | SIMD over matching dense layouts and generic strided traversal; float and signed integer |
 | Exp | Floating-point tensors; SIMD over matching dense layouts and strided traversal |
-| Add/sub/mul/div | Matching dtypes, trailing-axis broadcasting, dense-layout and batch-broadcast SIMD paths, strided traversal; div is floating-point |
+| Unary math | Floating-point negation, absolute value, square root, logarithm, and reciprocal |
+| Add/sub/mul/div | Matching numeric dtypes and trailing-axis broadcasting; div is floating-point |
+| Minimum/maximum/clamp | Elementwise numeric bounds with trailing-axis broadcasting |
+| Comparisons | Broadcast equality and ordered comparisons producing boolean tensors |
+| Boolean/selection | Strict logical operations and broadcast `where` selection |
+| Copy/contiguous | Fresh storage with lowering-selected or logical row-major layout |
+| Pad/windows | Materialized constant boundaries and zero-copy overlapping trailing-axis windows |
 | Matmul | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal |
 | Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, and strided traversal; mean is floating-point |
 | Softmax | Stable single-axis floating-point implementation, including strided axes |
@@ -89,8 +91,8 @@ Zig 0.16.0. The API should still be expected to change.
 - Compile-only check through `zig build check`.
 - Maintained root benchmark suite with shape and layout comparisons.
 - Reusable model-specific inspection CLI and generated-model runner modules.
-- Standalone sandbox consumer with an interactive model application and model
-  artifact tooling.
+- Standalone example packages with interactive applications and model artifact
+  tooling.
 
 ## Important limitations
 
@@ -122,7 +124,8 @@ The test suite currently exercises:
 - aligned memory planning and source loading;
 - model execution and typed output access;
 - contiguous, offset, broadcast, transposed, and negative-stride views;
-- ReLU, exp, add, sub, mul, div, matmul, sum, mean, min, max, and softmax behavior;
+- unary math, arithmetic, comparisons, boolean logic, selection, matmul,
+  reductions, softmax, padding, and overlapping-window behavior;
 - transpose, permutation, reshape, flatten, squeeze, unsqueeze, and slicing alias behavior;
 - SIMD tails and strided fallbacks;
 - end-to-end execution across graph-produced aliasing views.

@@ -1,4 +1,4 @@
-//! Read-only parameter bytes for the sandbox model.
+//! Read-only parameter bytes for the digit-classifier model.
 pub const w1 = @embedFile("w1.bin");
 pub const b1 = @embedFile("b1.bin");
 pub const w2 = @embedFile("w2.bin");

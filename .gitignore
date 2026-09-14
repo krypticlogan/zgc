@@ -8,5 +8,4 @@ zig-out
 *zig-pkg
 .DS_Store
 /benchmarks.md
-sandbox/inspect.sh
-sandbox/inspect-out
+inspect-out

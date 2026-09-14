@@ -1,11 +1,8 @@
-# Model sandbox
+# MNIST Digit Classifier
 
-The sandbox is a standalone Zig package that consumes ZGC through its
-public package interface. 
-
+This standalone Zig package consumes ZGC through its public package interface.
 It contains a 784→128→64→10 digit-classification network for interactive
-inference, inspection, and generated-artifact analysis, plus a small 1×8 ReLU
-model definition. Both use the public package interface.
+inference, inspection, and generated-artifact analysis.
 
 Run commands from this directory unless noted otherwise.
 
@@ -52,7 +49,7 @@ zig build inspect -- tree
 zig build inspect -- memory-plan
 ```
 
-See [model inspection](../docs/inspection.md) for the programmatic API and for
+See [model inspection](../../docs/inspection.md) for the programmatic API and for
 wiring the CLI to another generated model.
 
 ## Generated model artifact
@@ -84,13 +81,12 @@ lldb zig-out/bin/zgc-model
 (lldb) disassemble --name zgc_run_model
 ```
 
-See [generated model artifacts](../docs/model-artifacts.md) for wiring the same
+See [generated model artifacts](../../docs/model-artifacts.md) for wiring the same
 runner module to another model definition and for its exported symbol contract.
 
 ## Model definitions
 
-Both `src/digit-classifier.zig` and `src/relu-model.zig` use the public workflow
-expected of a consumer:
+`src/digit-classifier.zig` uses the public workflow expected of a consumer:
 
 1. Instantiate `DefinitionBackend` with a source enum and front-end bounds.
 2. Run the typed definition function once.
@@ -111,5 +107,5 @@ Run the benchmark suite from the repository root:
 zig build benchmark -Doptimize=ReleaseFast
 ```
 
-See [benchmarks/README.md](../benchmarks/README.md) for individual selectors,
+See [benchmarks/README.md](../../benchmarks/README.md) for individual selectors,
 methodology, and recorded results.
