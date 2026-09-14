@@ -6,6 +6,7 @@ pub fn AccumulatorScalar(comptime dtype: Dtype) type {
         .f16 => f32,
         .f32 => f32,
         .i8 => i32,
+        .bool => @compileError("boolean tensors cannot be accumulated"),
     };
 }
 
@@ -23,6 +24,7 @@ pub fn widenVector(
     return switch (comptime dtype.kind()) {
         .float => @as(AccVector, @floatCast(values)),
         .signed_integer => @as(AccVector, @intCast(values)),
+        .boolean => @compileError("boolean tensors cannot be accumulated"),
     };
 }
 
@@ -35,6 +37,7 @@ pub fn widenScalar(
     return switch (comptime dtype.kind()) {
         .float => @as(AccT, @floatCast(value)),
         .signed_integer => @as(AccT, @intCast(value)),
+        .boolean => @compileError("boolean tensors cannot be accumulated"),
     };
 }
 
@@ -46,6 +49,7 @@ pub fn narrowVector(
     return switch (comptime dtype.kind()) {
         .float => @floatCast(values),
         .signed_integer => @intCast(values),
+        .boolean => @compileError("boolean tensors cannot be accumulated"),
     };
 }
 
@@ -56,5 +60,6 @@ pub fn narrowScalar(
     return switch (comptime dtype.kind()) {
         .float => @floatCast(value),
         .signed_integer => @intCast(value),
+        .boolean => @compileError("boolean tensors cannot be accumulated"),
     };
 }

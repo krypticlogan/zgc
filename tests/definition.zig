@@ -121,3 +121,70 @@ test "scalar and full definitions retain immutable literal geometry" {
     }
     try std.testing.expectEqual(@as(usize, 1), definition.node_count);
 }
+
+const predicate_model = model: {
+    var builder = Definition.init();
+    const input = builder.input(.lhs, .f32, &.{ 2, 3 });
+    const threshold = builder.scalar(.f32, 0);
+    const condition = builder.greaterThan(input, threshold);
+    const fallback = builder.full(.f32, &.{ 1, 3 }, -1);
+    builder.output(condition);
+    builder.output(builder.where(condition, input, fallback));
+    break :model builder.finish().model();
+};
+
+test "comparisons and selection carry explicit boolean dtype through lowering" {
+    const graph = predicate_model.build_graph;
+    const condition = graph.tensors[2].?;
+    const selected = graph.tensors[5].?;
+
+    try std.testing.expectEqual(zgc.Dtype.bool, condition.dtype);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, condition.shape.slice());
+    try std.testing.expectEqual(zgc.Dtype.f32, selected.dtype);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, selected.shape.slice());
+    try std.testing.expectEqual(@as(bool, true), zgc.ScalarValue.init(.bool, true).get(.bool));
+
+    var model = predicate_model.init();
+    try model.copyInput(.lhs, &[_]f32{ -2, 0, 3, -4, 5, 6 });
+    model.run();
+    try std.testing.expectEqualSlices(bool, &.{ false, false, true, false, true, true }, model.outputView(0).storage);
+    try std.testing.expectEqualSlices(f32, &.{ -1, -1, 3, -1, 5, 6 }, model.outputView(1).storage);
+}
+
+test "primitive builders infer every math and predicate operation without model generation" {
+    const PrimitiveDefinition = zgc.DefinitionBackend(enum(usize) { input }, .{
+        .max_rank = 2,
+        .max_nodes = 24,
+        .max_tensors = 28,
+        .max_input_refs = 40,
+        .max_outputs = 1,
+    });
+    const definition = comptime blk: {
+        var builder = PrimitiveDefinition.init();
+        const input = builder.input(.input, .f32, &.{ 2, 3 });
+        const lower = builder.scalar(.f32, -1);
+        const upper = builder.scalar(.f32, 1);
+        const negated = builder.neg(input);
+        const magnitude = builder.abs(negated);
+        const rooted = builder.sqrt(magnitude);
+        const logged = builder.log(rooted);
+        const inverted = builder.reciprocal(logged);
+        const bounded_low = builder.minimum(inverted, upper);
+        const bounded_high = builder.maximum(bounded_low, lower);
+        const clamped = builder.clamp(bounded_high, lower, upper);
+        const equal = builder.equal(input, lower);
+        const not_equal = builder.notEqual(input, upper);
+        _ = builder.lessThan(input, upper);
+        _ = builder.lessEqual(input, upper);
+        _ = builder.greaterThan(input, lower);
+        _ = builder.greaterEqual(input, lower);
+        const not = builder.logicalNot(equal);
+        const and_mask = builder.logicalAnd(not, not_equal);
+        const mask = builder.logicalOr(and_mask, equal);
+        builder.output(builder.where(mask, clamped, lower));
+        break :blk builder.finish();
+    };
+
+    try std.testing.expectEqual(zgc.Dtype.f32, definition.tensors[definition.tensor_count - 1].value.dtype);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[definition.tensor_count - 1].value.shape.slice());
+}

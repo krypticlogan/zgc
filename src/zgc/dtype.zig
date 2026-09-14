@@ -4,10 +4,12 @@ pub const Dtype = enum {
     f32,
     f16,
     i8,
+    bool,
 
     pub const Kind = enum {
         float,
         signed_integer,
+        boolean,
     };
 
     pub fn Scalar(comptime self: Dtype) type {
@@ -15,6 +17,7 @@ pub const Dtype = enum {
             .f32 => f32,
             .f16 => f16,
             .i8 => i8,
+            .bool => bool,
         };
     }
 
@@ -25,6 +28,8 @@ pub const Dtype = enum {
             .f16
         else if (T == i8)
             .i8
+        else if (T == bool)
+            .bool
         else
             @compileError("unsupported tensor scalar type: " ++ @typeName(T));
     }
@@ -33,6 +38,7 @@ pub const Dtype = enum {
         return switch (dtype) {
             .f32, .f16 => .float,
             .i8 => .signed_integer,
+            .bool => .boolean,
         };
     }
 
@@ -41,7 +47,10 @@ pub const Dtype = enum {
     }
 
     pub fn zero(comptime dtype: Dtype) dtype.Scalar() {
-        return 0;
+        return switch (dtype) {
+            .bool => false,
+            else => 0,
+        };
     }
 
     pub fn vectorZero(comptime dtype: Dtype, comptime len: usize) dtype.Vector(len) {
@@ -53,6 +62,7 @@ pub const Dtype = enum {
             .f32 => @sizeOf(f32),
             .f16 => @sizeOf(f16),
             .i8 => @sizeOf(i8),
+            .bool => @sizeOf(bool),
         };
     }
 
@@ -61,6 +71,7 @@ pub const Dtype = enum {
             .f32 => @alignOf(f32),
             .f16 => @alignOf(f16),
             .i8 => @alignOf(i8),
+            .bool => @alignOf(bool),
         };
     }
 };
@@ -76,6 +87,7 @@ pub const ScalarValue = struct {
             .f32 => .{ .data_type = .f32, .bits = @bitCast(@as(f32, value)) },
             .f16 => .{ .data_type = .f16, .bits = @as(u16, @bitCast(@as(f16, value))) },
             .i8 => .{ .data_type = .i8, .bits = @as(u8, @bitCast(@as(i8, value))) },
+            .bool => .{ .data_type = .bool, .bits = @intFromBool(@as(bool, value)) },
         };
     }
 
@@ -84,6 +96,7 @@ pub const ScalarValue = struct {
     }
 
     pub fn get(value: ScalarValue, comptime dtype_value: Dtype) dtype_value.Scalar() {
+        if (dtype_value == .bool) return value.bits != 0;
         const T = dtype_value.Scalar();
         const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
         return @bitCast(@as(Bits, @truncate(value.bits)));

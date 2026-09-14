@@ -48,6 +48,10 @@ pub fn dtypeKindIs(value: anytype, comptime expected: Dtype.Kind) bool {
     return value.dtype.kind() == expected;
 }
 
+pub fn dtypeIsNumeric(value: anytype) bool {
+    return value.dtype.kind() != .boolean;
+}
+
 pub fn shapesMatch(lhs: anytype, rhs: anytype) bool {
     return std.mem.eql(usize, lhs.shape.slice(), rhs.shape.slice());
 }
@@ -143,6 +147,12 @@ pub fn requireDtypeKind(
 ) void {
     if (!dtypeKindIs(value, expected)) {
         @compileError(operation ++ " does not support the provided dtype kind");
+    }
+}
+
+pub fn requireNumericDtype(comptime operation: []const u8, value: anytype) void {
+    if (!dtypeIsNumeric(value)) {
+        @compileError(operation ++ " requires a numeric tensor");
     }
 }
 

@@ -12,6 +12,9 @@ pub fn model(
     comptime definition: Definition,
     comptime source_configuration: anytype,
 ) type {
+    const compile_work = 10_000 + definition.node_count *
+        (definition.tensor_count + definition.input_ref_count + Definition.max_rank + 16) * 64;
+    @setEvalBranchQuota(compile_work);
     const capacity = CountingBackend(Definition).count(definition);
     const lowered_graph = GraphBackend(Definition, capacity).build(definition);
     const Validated = ValidationBackend(capacity).validate(lowered_graph);

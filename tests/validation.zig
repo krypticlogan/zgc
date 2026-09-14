@@ -34,6 +34,7 @@ test "validation checks arity ranks and dtypes" {
         .{ .dtype = .f16, .rank = 1 },
     };
     const integer = CountedValue{ .dtype = .i8, .rank = 1 };
+    const boolean = CountedValue{ .dtype = .bool, .rank = 1 };
 
     try std.testing.expect(zgc.Validation.inputCountIs(&inputs, 2));
     try std.testing.expect(zgc.Validation.ranksAre(&inputs, &.{ 2, 2 }));
@@ -43,6 +44,10 @@ test "validation checks arity ranks and dtypes" {
     try std.testing.expect(!zgc.Validation.dtypesMatch(&mismatched));
     try std.testing.expect(zgc.Validation.dtypeKindIs(inputs[0], .float));
     try std.testing.expect(!zgc.Validation.dtypeKindIs(integer, .float));
+    try std.testing.expect(zgc.Validation.dtypeKindIs(boolean, .boolean));
+    try std.testing.expect(zgc.Validation.dtypeIsNumeric(inputs[0]));
+    try std.testing.expect(zgc.Validation.dtypeIsNumeric(integer));
+    try std.testing.expect(!zgc.Validation.dtypeIsNumeric(boolean));
 }
 
 test "validation checks shapes extents and axes" {

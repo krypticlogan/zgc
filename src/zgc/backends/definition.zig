@@ -1,7 +1,8 @@
 const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
 const ScalarValue = @import("../dtype.zig").ScalarValue;
-const Op = @import("../op.zig").Op;
+const op_module = @import("../op.zig");
+const Op = op_module.Op;
 const Tensor = @import("../tensor.zig");
 
 pub const Limits = struct {
@@ -30,6 +31,9 @@ pub const SliceOptions = struct {
     end: ?usize = null,
     step: usize = 1,
 };
+
+pub const PadOptions = Op.Compute.PadAttrs;
+pub const WindowOptions = Op.View.WindowAttrs;
 
 pub fn Value(comptime max_rank: usize) type {
     return struct {
@@ -159,6 +163,26 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             return self.addCompute(.exp, &.{tensor});
         }
 
+        pub fn neg(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.neg, &.{tensor});
+        }
+
+        pub fn abs(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.abs, &.{tensor});
+        }
+
+        pub fn sqrt(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.sqrt, &.{tensor});
+        }
+
+        pub fn log(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.log, &.{tensor});
+        }
+
+        pub fn reciprocal(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.reciprocal, &.{tensor});
+        }
+
         pub fn add(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
             return self.addCompute(.add, &.{ lhs, rhs });
         }
@@ -173,6 +197,92 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
 
         pub fn div(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
             return self.addCompute(.div, &.{ lhs, rhs });
+        }
+
+        pub fn minimum(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.minimum, &.{ lhs, rhs });
+        }
+
+        pub fn maximum(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.maximum, &.{ lhs, rhs });
+        }
+
+        pub fn clamp(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime lower: ValueType,
+            comptime upper: ValueType,
+        ) ValueType {
+            return self.addCompute(.clamp, &.{ tensor, lower, upper });
+        }
+
+        pub fn equal(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.equal, &.{ lhs, rhs });
+        }
+
+        pub fn notEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.not_equal, &.{ lhs, rhs });
+        }
+
+        pub fn lessThan(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.less_than, &.{ lhs, rhs });
+        }
+
+        pub fn lessEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.less_equal, &.{ lhs, rhs });
+        }
+
+        pub fn greaterThan(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.greater_than, &.{ lhs, rhs });
+        }
+
+        pub fn greaterEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.greater_equal, &.{ lhs, rhs });
+        }
+
+        pub fn logicalNot(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.logical_not, &.{tensor});
+        }
+
+        pub fn logicalAnd(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.logical_and, &.{ lhs, rhs });
+        }
+
+        pub fn logicalOr(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
+            return self.addCompute(.logical_or, &.{ lhs, rhs });
+        }
+
+        pub fn where(
+            self: *Self,
+            comptime condition: ValueType,
+            comptime when_true: ValueType,
+            comptime when_false: ValueType,
+        ) ValueType {
+            return self.addCompute(.where, &.{ condition, when_true, when_false });
+        }
+
+        /// Materialize a tensor into fresh storage. Lowering may preserve a
+        /// useful physical layout while retaining the tensor's logical shape.
+        pub fn copy(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.copy, &.{tensor});
+        }
+
+        /// Materialize a tensor into fresh logical row-major storage.
+        pub fn contiguous(self: *Self, comptime tensor: ValueType) ValueType {
+            return self.addCompute(.contiguous, &.{tensor});
+        }
+
+        /// Materialize constant padding around every input axis.
+        pub fn pad(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime fill: ValueType,
+            comptime options: PadOptions,
+        ) ValueType {
+            return self.addCompute(.{ .pad = .{
+                .before = options.before,
+                .after = options.after,
+            } }, &.{ tensor, fill });
         }
 
         pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
@@ -374,6 +484,23 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             } } }, &.{tensor}, tensor.dtype, shape);
         }
 
+        /// Expose overlapping windows over the trailing input axes. Output
+        /// position axes retain their input positions and window axes append
+        /// to the result.
+        pub fn windows(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime options: WindowOptions,
+        ) ValueType {
+            const attrs: Op.View.WindowAttrs = .{
+                .sizes = options.sizes,
+                .strides = options.strides,
+                .dilations = options.dilations,
+            };
+            const shape = op_module.inferWindowsShape(&.{tensor}, attrs, limits.max_rank);
+            return self.addNode(.{ .view = .{ .windows = attrs } }, &.{tensor}, tensor.dtype, shape);
+        }
+
         pub fn output(self: *Self, comptime value: ValueType) void {
             if (self.definition.output_count == limits.max_outputs) {
                 @compileError("definition exceeds max_outputs");
@@ -424,7 +551,8 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             comptime inputs: []const ValueType,
         ) ValueType {
             const shape = compute.inferShape(inputs, limits.max_rank);
-            return self.addNode(.{ .compute = compute }, inputs, inputs[0].dtype, shape);
+            const dtype = compute.inferDtype(inputs);
+            return self.addNode(.{ .compute = compute }, inputs, dtype, shape);
         }
 
         fn addNode(

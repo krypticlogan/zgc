@@ -237,6 +237,27 @@ fn applyBinaryDense(
     }
 }
 
+fn ternary(a: anytype, b: anytype, c: anytype, output: anytype, comptime Operator: type) void {
+    const Output = @TypeOf(output);
+    const output_shape = if (comptime hasStaticGeometry(Output)) Output.static_shape else output.shape;
+    const a_view = a.broadcastTo(Output.rank, output_shape);
+    const b_view = b.broadcastTo(Output.rank, output_shape);
+    const c_view = c.broadcastTo(Output.rank, output_shape);
+
+    for (0..output.len()) |linear_index| {
+        const a_index = a_view.elementOffsetFromLinear(linear_index);
+        const b_index = b_view.elementOffsetFromLinear(linear_index);
+        const c_index = c_view.elementOffsetFromLinear(linear_index);
+        const output_index = output.elementOffsetFromLinear(linear_index);
+        output.storage[output_index] = Operator.scalar(
+            Output.dtype,
+            a_view.storage[a_index],
+            b_view.storage[b_index],
+            c_view.storage[c_index],
+        );
+    }
+}
+
 pub fn relu(input: anytype, output: anytype) void {
     unary(input, output, struct {
         fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
@@ -265,6 +286,67 @@ pub fn exp(input: anytype, output: anytype) void {
             values: dtype.Vector(len),
         ) dtype.Vector(len) {
             return @exp(values);
+        }
+    });
+}
+
+pub fn neg(input: anytype, output: anytype) void {
+    unary(input, output, struct {
+        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
+            return -value;
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
+            return -values;
+        }
+    });
+}
+
+pub fn abs(input: anytype, output: anytype) void {
+    unary(input, output, struct {
+        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
+            return @abs(value);
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
+            return @abs(values);
+        }
+    });
+}
+
+pub fn sqrt(input: anytype, output: anytype) void {
+    unary(input, output, struct {
+        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
+            return @sqrt(value);
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
+            return @sqrt(values);
+        }
+    });
+}
+
+pub fn log(input: anytype, output: anytype) void {
+    unary(input, output, struct {
+        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
+            return @log(value);
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
+            return @log(values);
+        }
+    });
+}
+
+pub fn reciprocal(input: anytype, output: anytype) void {
+    unary(input, output, struct {
+        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
+            return 1 / value;
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
+            const ones: dtype.Vector(len) = @splat(1);
+            return ones / values;
         }
     });
 }
@@ -313,6 +395,43 @@ pub fn div(a: anytype, b: anytype, output: anytype) void {
 
         fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
             return a_vec / b_vec;
+        }
+    });
+}
+
+pub fn minimum(a: anytype, b: anytype, output: anytype) void {
+    binary(a, b, output, struct {
+        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
+            return @min(a_value, b_value);
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
+            return @min(a_vec, b_vec);
+        }
+    });
+}
+
+pub fn maximum(a: anytype, b: anytype, output: anytype) void {
+    binary(a, b, output, struct {
+        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
+            return @max(a_value, b_value);
+        }
+
+        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
+            return @max(a_vec, b_vec);
+        }
+    });
+}
+
+pub fn clamp(input: anytype, lower: anytype, upper: anytype, output: anytype) void {
+    ternary(input, lower, upper, output, struct {
+        fn scalar(
+            comptime dtype: Dtype,
+            value: dtype.Scalar(),
+            lower_bound: dtype.Scalar(),
+            upper_bound: dtype.Scalar(),
+        ) dtype.Scalar() {
+            return std.math.clamp(value, lower_bound, upper_bound);
         }
     });
 }

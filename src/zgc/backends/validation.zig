@@ -41,7 +41,7 @@ pub fn ValidationBackend(comptime capacity: Graph.Capacity) type {
                         if (!std.mem.eql(usize, expected_shape.slice(), output.shape.slice())) {
                             @compileError("lowered operation output shape does not match its inferred shape");
                         }
-                        const expected_dtype = inputs[0].dtype;
+                        const expected_dtype = compute.inferDtype(&inputs);
                         if (output.dtype != expected_dtype) {
                             @compileError("lowered operation output dtype does not match its inferred dtype");
                         }

@@ -1,5 +1,6 @@
 const std = @import("std");
-const Op = @import("../op.zig").Op;
+const op_module = @import("../op.zig");
+const Op = op_module.Op;
 const Tensor = @import("../tensor.zig");
 const validation = @import("../validation.zig");
 
@@ -27,7 +28,41 @@ pub fn infer(
         .unsqueeze => |attrs| unsqueeze(inputs, attrs, output_shape, max_rank),
         .slice => |attrs| slice(inputs, attrs, output_shape, max_rank),
         .broadcast => broadcast(inputs, output_shape, max_rank),
+        .windows => |attrs| windows(inputs, attrs, output_shape, max_rank),
     };
+}
+
+fn windows(
+    comptime inputs: anytype,
+    comptime attrs: Op.View.WindowAttrs,
+    comptime output_shape: anytype,
+    comptime max_rank: usize,
+) Result(max_rank) {
+    const expected_shape = op_module.inferWindowsShape(inputs, attrs, max_rank);
+    if (!std.mem.eql(usize, expected_shape.slice(), output_shape.slice())) {
+        @compileError("windows output shape does not match its inferred geometry");
+    }
+
+    const input = inputs[0];
+    const input_rank = input.shape.rank;
+    const window_rank = attrs.sizes.len;
+    const first_window_axis = input_rank - window_rank;
+    var output_layout = Tensor.Layout(max_rank){
+        .offset = input.layout.offset,
+        .strides = @splat(0),
+    };
+
+    for (0..first_window_axis) |axis| {
+        output_layout.strides[axis] = input.layout.strides[axis];
+    }
+    for (0..window_rank) |window_axis| {
+        const input_axis = first_window_axis + window_axis;
+        output_layout.strides[input_axis] = input.layout.strides[input_axis] *
+            @as(isize, @intCast(op_module.windowStride(attrs, window_axis)));
+        output_layout.strides[input_rank + window_axis] = input.layout.strides[input_axis] *
+            @as(isize, @intCast(op_module.windowDilation(attrs, window_axis)));
+    }
+    return aliasResult(input, expected_shape, output_layout, max_rank);
 }
 
 fn reshape(

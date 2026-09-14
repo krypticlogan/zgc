@@ -267,6 +267,7 @@ fn writeScalarValue(writer: *Writer, value: @import("dtype.zig").ScalarValue) Wr
         .f32 => try writer.print("f32({d})", .{value.get(.f32)}),
         .f16 => try writer.print("f16({d})", .{value.get(.f16)}),
         .i8 => try writer.print("i8({d})", .{value.get(.i8)}),
+        .bool => try writer.print("bool({any})", .{value.get(.bool)}),
     }
 }
 
@@ -284,10 +285,37 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
         .compute => |compute| switch (compute) {
             .relu => try writer.writeAll("relu"),
             .exp => try writer.writeAll("exp"),
+            .neg => try writer.writeAll("neg"),
+            .abs => try writer.writeAll("abs"),
+            .sqrt => try writer.writeAll("sqrt"),
+            .log => try writer.writeAll("log"),
+            .reciprocal => try writer.writeAll("reciprocal"),
             .add => try writer.writeAll("add"),
             .sub => try writer.writeAll("sub"),
             .mul => try writer.writeAll("mul"),
             .div => try writer.writeAll("div"),
+            .minimum => try writer.writeAll("minimum"),
+            .maximum => try writer.writeAll("maximum"),
+            .clamp => try writer.writeAll("clamp"),
+            .equal => try writer.writeAll("equal"),
+            .not_equal => try writer.writeAll("not_equal"),
+            .less_than => try writer.writeAll("less_than"),
+            .less_equal => try writer.writeAll("less_equal"),
+            .greater_than => try writer.writeAll("greater_than"),
+            .greater_equal => try writer.writeAll("greater_equal"),
+            .logical_not => try writer.writeAll("logical_not"),
+            .logical_and => try writer.writeAll("logical_and"),
+            .logical_or => try writer.writeAll("logical_or"),
+            .where => try writer.writeAll("where"),
+            .copy => try writer.writeAll("copy"),
+            .contiguous => try writer.writeAll("contiguous"),
+            .pad => |attrs| {
+                try writer.writeAll("pad(before=");
+                try writeDimensions(writer, attrs.before);
+                try writer.writeAll(", after=");
+                try writeDimensions(writer, attrs.after);
+                try writer.writeByte(')');
+            },
             .matmul => |plan| try writer.print(
                 "matmul({s})",
                 .{@tagName(plan.strategy)},
@@ -316,8 +344,30 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
                 .{ attrs.axis, attrs.start, attrs.length, attrs.step },
             ),
             .broadcast => try writer.writeAll("broadcast"),
+            .windows => |attrs| {
+                try writer.writeAll("windows(sizes=");
+                try writeDimensions(writer, attrs.sizes);
+                if (attrs.strides) |strides| {
+                    try writer.writeAll(", strides=");
+                    try writeDimensions(writer, strides);
+                }
+                if (attrs.dilations) |dilations| {
+                    try writer.writeAll(", dilations=");
+                    try writeDimensions(writer, dilations);
+                }
+                try writer.writeByte(')');
+            },
         },
     }
+}
+
+fn writeDimensions(writer: *Writer, dimensions: []const usize) Writer.Error!void {
+    try writer.writeByte('[');
+    for (dimensions, 0..) |dimension, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writer.print("{d}", .{dimension});
+    }
+    try writer.writeByte(']');
 }
 
 fn writeReduction(writer: *Writer, name: []const u8, attrs: Op.Compute.ReductionAttrs) Writer.Error!void {

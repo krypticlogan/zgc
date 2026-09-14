@@ -120,6 +120,7 @@ const Min = struct {
         return switch (comptime dtype.kind()) {
             .float => std.math.inf(accumulation.AccumulatorScalar(dtype)),
             .signed_integer => std.math.maxInt(accumulation.AccumulatorScalar(dtype)),
+            .boolean => @compileError("boolean tensors cannot be reduced with min"),
         };
     }
     fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {
@@ -135,6 +136,7 @@ const Max = struct {
         return switch (comptime dtype.kind()) {
             .float => -std.math.inf(accumulation.AccumulatorScalar(dtype)),
             .signed_integer => std.math.minInt(accumulation.AccumulatorScalar(dtype)),
+            .boolean => @compileError("boolean tensors cannot be reduced with max"),
         };
     }
     fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {

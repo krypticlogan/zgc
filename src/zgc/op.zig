@@ -15,10 +15,31 @@ pub const Op = union(enum) {
     pub const Compute = union(enum) {
         relu,
         exp,
+        neg,
+        abs,
+        sqrt,
+        log,
+        reciprocal,
         add,
         sub,
         mul,
         div,
+        minimum,
+        maximum,
+        clamp,
+        equal,
+        not_equal,
+        less_than,
+        less_equal,
+        greater_than,
+        greater_equal,
+        logical_not,
+        logical_and,
+        logical_or,
+        where,
+        copy,
+        contiguous,
+        pad: PadAttrs,
         matmul: MatmulAttrs,
         sum: ReductionAttrs,
         mean: ReductionAttrs,
@@ -33,6 +54,10 @@ pub const Op = union(enum) {
         };
         pub const SoftmaxAttrs = struct { axis: i8 };
         pub const ConcatAttrs = struct { axis: i8 };
+        pub const PadAttrs = struct {
+            before: []const usize,
+            after: []const usize,
+        };
         pub const MatmulAttrs = Matmul.Plan;
 
         pub fn execute(
@@ -45,24 +70,31 @@ pub const Op = union(enum) {
 
         pub fn inferRank(op: Compute, inputs: anytype) usize {
             return switch (op) {
-                .relu => inferUnaryRank("relu", inputs),
-                .exp => inferFloatUnaryRank("exp", inputs),
-                .add => inferAddRank(inputs),
-                .sub => inferBinaryElementwiseRank("sub", inputs),
-                .mul => inferBinaryElementwiseRank("mul", inputs),
+                .relu => inferNumericUnaryRank("relu", inputs),
+                .exp, .neg, .abs, .sqrt, .log, .reciprocal => inferFloatUnaryRank(@tagName(op), inputs),
+                .add, .sub, .mul, .minimum, .maximum => inferNumericBinaryRank(@tagName(op), inputs),
                 .div => blk: {
-                    const rank = inferBinaryElementwiseRank("div", inputs);
+                    const rank = inferNumericBinaryRank("div", inputs);
                     validation.requireDtypeKind("div", inputs[0], .float);
                     break :blk rank;
                 },
+                .clamp => inferNumericTernaryRank("clamp", inputs),
+                .equal, .not_equal => inferBinaryElementwiseRank(@tagName(op), inputs),
+                .less_than, .less_equal, .greater_than, .greater_equal => inferNumericBinaryRank(@tagName(op), inputs),
+                .logical_not => inferBooleanUnaryRank("logical_not", inputs),
+                .logical_and, .logical_or => inferBooleanBinaryRank(@tagName(op), inputs),
+                .where => inferWhereRank(inputs),
+                .copy, .contiguous => inferUnaryRank(@tagName(op), inputs),
+                .pad => |attrs| inferPadRank(inputs, attrs),
                 .matmul => inferMatmulRank(inputs),
-                .sum => |attrs| inferReductionRank("sum", inputs, attrs),
+                .sum => |attrs| inferNumericReductionRank("sum", inputs, attrs),
                 .mean => |attrs| blk: {
+                    const rank = inferReductionRank("mean", inputs, attrs);
                     validation.requireDtypeKind("mean", inputs[0], .float);
-                    break :blk inferReductionRank("mean", inputs, attrs);
+                    break :blk rank;
                 },
-                .min => |attrs| inferReductionRank("min", inputs, attrs),
-                .max => |attrs| inferReductionRank("max", inputs, attrs),
+                .min => |attrs| inferNumericReductionRank("min", inputs, attrs),
+                .max => |attrs| inferNumericReductionRank("max", inputs, attrs),
                 .concat => |attrs| inferConcatRank(inputs, attrs.axis),
                 .softmax => |attrs| blk: {
                     const rank = inferFloatUnaryRank("softmax", inputs);
@@ -78,26 +110,39 @@ pub const Op = union(enum) {
             comptime max_rank: usize,
         ) Tensor.Shape(max_rank) {
             return switch (op) {
-                .relu => inferUnaryShape("relu", inputs, max_rank),
-                .exp => blk: {
-                    _ = inferFloatUnaryRank("exp", inputs);
-                    break :blk inferUnaryShape("exp", inputs, max_rank);
+                .relu => blk: {
+                    _ = inferNumericUnaryRank("relu", inputs);
+                    break :blk inferUnaryShape("relu", inputs, max_rank);
                 },
-                .add => inferAddShape(inputs, max_rank),
-                .sub => inferBinaryElementwiseShape("sub", inputs, max_rank),
-                .mul => inferBinaryElementwiseShape("mul", inputs, max_rank),
+                .exp, .neg, .abs, .sqrt, .log, .reciprocal => blk: {
+                    _ = inferFloatUnaryRank(@tagName(op), inputs);
+                    break :blk inferUnaryShape(@tagName(op), inputs, max_rank);
+                },
+                .add, .sub, .mul, .minimum, .maximum => inferNumericBinaryShape(@tagName(op), inputs, max_rank),
                 .div => blk: {
                     validation.requireDtypeKind("div", inputs[0], .float);
-                    break :blk inferBinaryElementwiseShape("div", inputs, max_rank);
+                    break :blk inferNumericBinaryShape("div", inputs, max_rank);
                 },
+                .clamp => inferNumericTernaryShape("clamp", inputs, max_rank),
+                .equal, .not_equal => inferBinaryElementwiseShape(@tagName(op), inputs, max_rank),
+                .less_than, .less_equal, .greater_than, .greater_equal => inferNumericBinaryShape(@tagName(op), inputs, max_rank),
+                .logical_not => blk: {
+                    _ = inferBooleanUnaryRank("logical_not", inputs);
+                    break :blk inferUnaryShape("logical_not", inputs, max_rank);
+                },
+                .logical_and, .logical_or => inferBooleanBinaryShape(@tagName(op), inputs, max_rank),
+                .where => inferWhereShape(inputs, max_rank),
+                .copy, .contiguous => inferUnaryShape(@tagName(op), inputs, max_rank),
+                .pad => |attrs| inferPadShape(inputs, attrs, max_rank),
                 .matmul => inferMatmulShape(inputs, max_rank),
-                .sum => |attrs| inferReductionShape("sum", inputs, attrs, max_rank),
+                .sum => |attrs| inferNumericReductionShape("sum", inputs, attrs, max_rank),
                 .mean => |attrs| blk: {
+                    _ = inferReductionRank("mean", inputs, attrs);
                     validation.requireDtypeKind("mean", inputs[0], .float);
                     break :blk inferReductionShape("mean", inputs, attrs, max_rank);
                 },
-                .min => |attrs| inferReductionShape("min", inputs, attrs, max_rank),
-                .max => |attrs| inferReductionShape("max", inputs, attrs, max_rank),
+                .min => |attrs| inferNumericReductionShape("min", inputs, attrs, max_rank),
+                .max => |attrs| inferNumericReductionShape("max", inputs, attrs, max_rank),
                 .concat => |attrs| inferConcatShape(inputs, attrs.axis, max_rank),
                 .softmax => |attrs| blk: {
                     _ = inferFloatUnaryRank("softmax", inputs);
@@ -105,6 +150,23 @@ pub const Op = union(enum) {
                     validation.requireAxis("softmax", inputs[0], attrs.axis);
                     break :blk shape;
                 },
+            };
+        }
+
+        pub fn inferDtype(op: Compute, inputs: anytype) @import("dtype.zig").Dtype {
+            return switch (op) {
+                .equal,
+                .not_equal,
+                .less_than,
+                .less_equal,
+                .greater_than,
+                .greater_equal,
+                .logical_not,
+                .logical_and,
+                .logical_or,
+                => .bool,
+                .where => inputs[1].dtype,
+                else => inputs[0].dtype,
             };
         }
     };
@@ -117,6 +179,7 @@ pub const Op = union(enum) {
         unsqueeze: AxisAttrs,
         slice: SliceAttrs,
         broadcast,
+        windows: WindowAttrs,
 
         pub const TransposeAttrs = struct { axis_a: i8, axis_b: i8 };
         pub const FlattenAttrs = struct { start_axis: i8, end_axis: i8 };
@@ -126,6 +189,11 @@ pub const Op = union(enum) {
             start: usize,
             length: usize,
             step: usize,
+        };
+        pub const WindowAttrs = struct {
+            sizes: []const usize,
+            strides: ?[]const usize = null,
+            dilations: ?[]const usize = null,
         };
     };
 
@@ -144,6 +212,59 @@ pub const Op = union(enum) {
     }
 };
 
+pub fn inferWindowsShape(
+    comptime inputs: anytype,
+    comptime attrs: Op.View.WindowAttrs,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    validation.requireInputCount("windows", inputs, 1);
+    const input_rank = validation.rankOf(inputs[0]);
+    const window_rank = attrs.sizes.len;
+    if (window_rank == 0) @compileError("windows requires at least one window axis");
+    if (window_rank > input_rank) @compileError("windows cannot cover more axes than the input rank");
+    if (input_rank + window_rank > max_rank) @compileError("windows output exceeds the definition max_rank");
+    if (attrs.strides) |strides| {
+        if (strides.len != window_rank) @compileError("window strides must match the number of window axes");
+    }
+    if (attrs.dilations) |dilations| {
+        if (dilations.len != window_rank) @compileError("window dilations must match the number of window axes");
+    }
+
+    var result = Tensor.Shape(max_rank){
+        .rank = input_rank + window_rank,
+        .dims = @splat(0),
+    };
+    for (inputs[0].shape.slice(), 0..) |extent, axis| result.dims[axis] = extent;
+
+    const first_window_axis = input_rank - window_rank;
+    for (0..window_rank) |window_axis| {
+        const size = attrs.sizes[window_axis];
+        const stride = windowStride(attrs, window_axis);
+        const dilation = windowDilation(attrs, window_axis);
+        if (size == 0 or stride == 0 or dilation == 0) {
+            @compileError("window sizes, strides, and dilations must be greater than zero");
+        }
+        const span = std.math.mul(usize, size - 1, dilation) catch
+            @compileError("dilated window span exceeds usize");
+        const effective_size = std.math.add(usize, span, 1) catch
+            @compileError("dilated window size exceeds usize");
+        const input_axis = first_window_axis + window_axis;
+        const input_extent = inputs[0].shape.at(input_axis);
+        if (effective_size > input_extent) @compileError("window does not fit within its input extent");
+        result.dims[input_axis] = (input_extent - effective_size) / stride + 1;
+        result.dims[input_rank + window_axis] = size;
+    }
+    return result;
+}
+
+pub fn windowStride(comptime attrs: Op.View.WindowAttrs, comptime axis: usize) usize {
+    return if (attrs.strides) |strides| strides[axis] else 1;
+}
+
+pub fn windowDilation(comptime attrs: Op.View.WindowAttrs, comptime axis: usize) usize {
+    return if (attrs.dilations) |dilations| dilations[axis] else 1;
+}
+
 fn inferUnaryRank(comptime operation: []const u8, inputs: anytype) usize {
     validation.requireInputCount(operation, inputs, 1);
     return validation.rankOf(inputs[0]);
@@ -161,6 +282,18 @@ fn inferUnaryShape(
 fn inferFloatUnaryRank(comptime operation: []const u8, inputs: anytype) usize {
     const rank = inferUnaryRank(operation, inputs);
     validation.requireDtypeKind(operation, inputs[0], .float);
+    return rank;
+}
+
+fn inferNumericUnaryRank(comptime operation: []const u8, inputs: anytype) usize {
+    const rank = inferUnaryRank(operation, inputs);
+    validation.requireNumericDtype(operation, inputs[0]);
+    return rank;
+}
+
+fn inferBooleanUnaryRank(comptime operation: []const u8, inputs: anytype) usize {
+    const rank = inferUnaryRank(operation, inputs);
+    validation.requireDtype(operation, inputs[0], .bool);
     return rank;
 }
 
@@ -191,6 +324,26 @@ fn inferReductionShape(
     return shape;
 }
 
+fn inferNumericReductionRank(
+    comptime operation: []const u8,
+    inputs: anytype,
+    comptime attrs: Op.Compute.ReductionAttrs,
+) usize {
+    const rank = inferReductionRank(operation, inputs, attrs);
+    validation.requireNumericDtype(operation, inputs[0]);
+    return rank;
+}
+
+fn inferNumericReductionShape(
+    comptime operation: []const u8,
+    comptime inputs: anytype,
+    comptime attrs: Op.Compute.ReductionAttrs,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    _ = inferNumericReductionRank(operation, inputs, attrs);
+    return inferReductionShape(operation, inputs, attrs, max_rank);
+}
+
 fn inferBinaryElementwiseRank(
     comptime operation: []const u8,
     inputs: anytype,
@@ -198,6 +351,61 @@ fn inferBinaryElementwiseRank(
     validation.requireInputCount(operation, inputs, 2);
     validation.requireMatchingDtypes(operation, inputs);
     return @max(validation.rankOf(inputs[0]), validation.rankOf(inputs[1]));
+}
+
+fn inferNumericBinaryRank(comptime operation: []const u8, inputs: anytype) usize {
+    const rank = inferBinaryElementwiseRank(operation, inputs);
+    validation.requireNumericDtype(operation, inputs[0]);
+    return rank;
+}
+
+fn inferBooleanBinaryRank(comptime operation: []const u8, inputs: anytype) usize {
+    const rank = inferBinaryElementwiseRank(operation, inputs);
+    validation.requireDtype(operation, inputs[0], .bool);
+    return rank;
+}
+
+fn inferNumericTernaryRank(comptime operation: []const u8, inputs: anytype) usize {
+    validation.requireInputCount(operation, inputs, 3);
+    validation.requireMatchingDtypes(operation, inputs);
+    validation.requireNumericDtype(operation, inputs[0]);
+    return broadcastRank(inputs);
+}
+
+fn inferWhereRank(inputs: anytype) usize {
+    validation.requireInputCount("where", inputs, 3);
+    validation.requireDtype("where", inputs[0], .bool);
+    if (inputs[1].dtype != inputs[2].dtype) {
+        @compileError("where value dtypes must match");
+    }
+    return broadcastRank(inputs);
+}
+
+fn inferPadRank(inputs: anytype, comptime attrs: Op.Compute.PadAttrs) usize {
+    validation.requireInputCount("pad", inputs, 2);
+    validation.requireMatchingDtypes("pad", inputs);
+    if (validation.rankOf(inputs[1]) != 0) @compileError("pad fill value must be rank zero");
+    const rank = validation.rankOf(inputs[0]);
+    if (attrs.before.len != rank or attrs.after.len != rank) {
+        @compileError("pad requires one before and after width per input axis");
+    }
+    return rank;
+}
+
+fn inferPadShape(
+    comptime inputs: anytype,
+    comptime attrs: Op.Compute.PadAttrs,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    const rank = inferPadRank(inputs, attrs);
+    var result = inputs[0].shape;
+    for (0..rank) |axis| {
+        const with_before = std.math.add(usize, result.dims[axis], attrs.before[axis]) catch
+            @compileError("pad output extent exceeds usize");
+        result.dims[axis] = std.math.add(usize, with_before, attrs.after[axis]) catch
+            @compileError("pad output extent exceeds usize");
+    }
+    return result;
 }
 
 fn inferConcatRank(inputs: anytype, comptime axis: i8) usize {
@@ -236,46 +444,78 @@ fn inferBinaryElementwiseShape(
     comptime inputs: anytype,
     comptime max_rank: usize,
 ) Tensor.Shape(max_rank) {
-    const result_rank = inferBinaryElementwiseRank(operation, inputs);
-    const lhs_shape = inputs[0].shape.slice();
-    const rhs_shape = inputs[1].shape.slice();
+    _ = inferBinaryElementwiseRank(operation, inputs);
+    return inferBroadcastShape(operation, inputs, max_rank);
+}
+
+fn inferNumericBinaryShape(
+    comptime operation: []const u8,
+    comptime inputs: anytype,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    _ = inferNumericBinaryRank(operation, inputs);
+    return inferBroadcastShape(operation, inputs, max_rank);
+}
+
+fn inferBooleanBinaryShape(
+    comptime operation: []const u8,
+    comptime inputs: anytype,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    _ = inferBooleanBinaryRank(operation, inputs);
+    return inferBroadcastShape(operation, inputs, max_rank);
+}
+
+fn inferNumericTernaryShape(
+    comptime operation: []const u8,
+    comptime inputs: anytype,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    _ = inferNumericTernaryRank(operation, inputs);
+    return inferBroadcastShape(operation, inputs, max_rank);
+}
+
+fn inferWhereShape(comptime inputs: anytype, comptime max_rank: usize) Tensor.Shape(max_rank) {
+    _ = inferWhereRank(inputs);
+    return inferBroadcastShape("where", inputs, max_rank);
+}
+
+fn broadcastRank(inputs: anytype) usize {
+    var result: usize = 0;
+    for (inputs) |input| result = @max(result, validation.rankOf(input));
+    return result;
+}
+
+fn inferBroadcastShape(
+    comptime operation: []const u8,
+    comptime inputs: anytype,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    const result_rank = broadcastRank(inputs);
     var result = Tensor.Shape(max_rank){
         .rank = result_rank,
         .dims = @splat(0),
     };
 
     for (0..result_rank) |axis_from_end| {
-        const lhs_extent = if (axis_from_end < lhs_shape.len)
-            lhs_shape[lhs_shape.len - 1 - axis_from_end]
-        else
-            1;
-        const rhs_extent = if (axis_from_end < rhs_shape.len)
-            rhs_shape[rhs_shape.len - 1 - axis_from_end]
-        else
-            1;
-
-        if (!validation.extentsBroadcast(lhs_extent, rhs_extent)) {
-            @compileError(std.fmt.comptimePrint(
-                "{s} cannot broadcast extents {d} and {d} at aligned axis {d}",
-                .{ operation, lhs_extent, rhs_extent, result_rank - 1 - axis_from_end },
-            ));
+        var extent: usize = 1;
+        for (inputs) |input| {
+            const shape = input.shape.slice();
+            const candidate = if (axis_from_end < shape.len)
+                shape[shape.len - 1 - axis_from_end]
+            else
+                1;
+            if (!validation.extentsBroadcast(extent, candidate)) {
+                @compileError(std.fmt.comptimePrint(
+                    "{s} cannot broadcast extents {d} and {d} at aligned axis {d}",
+                    .{ operation, extent, candidate, result_rank - 1 - axis_from_end },
+                ));
+            }
+            if (extent == 1) extent = candidate;
         }
-
-        result.dims[result_rank - 1 - axis_from_end] =
-            if (lhs_extent == 1) rhs_extent else lhs_extent;
+        result.dims[result_rank - 1 - axis_from_end] = extent;
     }
     return result;
-}
-
-fn inferAddRank(inputs: anytype) usize {
-    return inferBinaryElementwiseRank("add", inputs);
-}
-
-fn inferAddShape(
-    comptime inputs: anytype,
-    comptime max_rank: usize,
-) Tensor.Shape(max_rank) {
-    return inferBinaryElementwiseShape("add", inputs, max_rank);
 }
 
 fn inferMatmulRank(inputs: anytype) usize {
