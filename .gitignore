@@ -9,3 +9,4 @@ zig-out
 .DS_Store
 /benchmarks.md
 inspect-out
+playground

@@ -101,6 +101,7 @@ pub fn Model(
         }
 
         pub fn run(model: *Self) void {
+            @setEvalBranchQuota(1_000 + graph.node_ct * 64);
             inline for (0..graph.node_ct) |node_id| {
                 model.executeNode(node_id);
             }

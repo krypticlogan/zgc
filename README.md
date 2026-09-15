@@ -30,7 +30,8 @@ The project targets Zig 0.16.0.
 - Core-backed dense and sequential graph layers through `zgc.nn`.
 - Rank-4 image input conventions through `zgc.img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
-
+- Lean binaries and first-class inspection for any compiled tensor graph.
+-
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
 
@@ -225,6 +226,7 @@ and recorded results.
 | `tests/` | Compile-time graph, runtime model, validation, view, and kernel coverage |
 | `benchmarks/` | Operation and generated-model benchmark harness, with recorded results |
 | `examples/` | Standalone model definitions, interactive applications, inspection, and artifact analysis |
+| `playground/` | Standalone scratch package for graph construction, execution, testing, inspection, and disassembly |
 | `docs/` | Architecture, design constraints, capabilities, and limitations |
 
 ## Documentation
@@ -237,4 +239,5 @@ and recorded results.
 - [Development state](docs/development-state.md)
 - [MNIST digit classifier](examples/mnist-digit-classifier/README.md)
 - [Conway's Game of Life](examples/conways-game-of-life/README.md)
+- [Graph playground](playground/README.md)
 - [Benchmarks](benchmarks/README.md)

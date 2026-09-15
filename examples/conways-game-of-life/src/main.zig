@@ -6,7 +6,7 @@ const cell_size: usize = 8;
 const header_height: usize = 64;
 const screen_width: i32 = @intCast(life.width * cell_size);
 const screen_height: i32 = @intCast(life.height * cell_size + header_height);
-const step_seconds: f32 = 0.008;
+const step_seconds: f32 = 0.08;
 
 pub fn main() void {
     rl.setTraceLogLevel(.err);
