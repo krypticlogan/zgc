@@ -1,0 +1,343 @@
+const std = @import("std");
+const rl = @import("raylib");
+const fluid = @import("fluid_model");
+
+const cell_size = 4;
+const header_height = 108;
+const arrow_spacing = 12;
+const screen_width: i32 = fluid.W * cell_size;
+const screen_height: i32 = fluid.H * cell_size + header_height;
+const population_count = fluid.H * fluid.W * 9;
+const cell_count = fluid.H * fluid.W;
+const weights = [9]f32{ 4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0 };
+const cx = [9]f32{ 0, 1, 0, -1, 0, 1, -1, -1, 1 };
+const cy = [9]f32{ 0, 0, 1, 0, -1, 1, 1, -1, -1 };
+const Field = enum { speed, density };
+
+pub fn main() void {
+    rl.setTraceLogLevel(.err);
+    rl.initWindow(screen_width, screen_height, "ZGC D2Q9 fluid dynamics");
+    defer rl.closeWindow();
+    rl.setTargetFPS(60);
+
+    var model = fluid.FluidStep.init();
+    model.copySource(.cx, &cx) catch unreachable;
+    model.copySource(.cy, &cy) catch unreachable;
+    model.copySource(.weights, &weights) catch unreachable;
+
+    var populations: [population_count]f32 = undefined;
+    var force_x: [cell_count]f32 = @splat(0);
+    var force_y: [cell_count]f32 = @splat(0);
+    seedVortices(&populations);
+    var omega: f32 = 1.0;
+    advance(&model, &populations, &force_x, &force_y, omega);
+
+    var running = true;
+    var step_count: u64 = 1;
+    var field: Field = .speed;
+    var show_vectors = false;
+    var previous_mouse = rl.getMousePosition();
+    var was_dragging = false;
+
+    while (!rl.windowShouldClose()) {
+        updateForces(&force_x, &force_y, &previous_mouse, &was_dragging);
+        if (rl.isKeyPressed(.space)) running = !running;
+        if (rl.isKeyPressed(.v)) field = if (field == .speed) .density else .speed;
+        if (rl.isKeyPressed(.a)) show_vectors = !show_vectors;
+        if (rl.isKeyPressed(.left_bracket)) omega = std.math.clamp(omega - 0.05, 0.6, 1.7);
+        if (rl.isKeyPressed(.right_bracket)) omega = std.math.clamp(omega + 0.05, 0.6, 1.7);
+        if (rl.isKeyPressed(.r)) {
+            seedVortices(&populations);
+            force_x = @splat(0);
+            force_y = @splat(0);
+            advance(&model, &populations, &force_x, &force_y, omega);
+            step_count = 1;
+        } else if (rl.isKeyPressed(.n)) {
+            advance(&model, &populations, &force_x, &force_y, omega);
+            step_count += 1;
+            running = false;
+        } else if (running) {
+            advance(&model, &populations, &force_x, &force_y, omega);
+            step_count += 1;
+        }
+
+        const density = model.outputView(1).contiguousSlice().?;
+        const velocity_x = model.outputView(2).contiguousSlice().?;
+        const velocity_y = model.outputView(3).contiguousSlice().?;
+
+        rl.beginDrawing();
+        defer rl.endDrawing();
+        rl.clearBackground(rl.Color.init(10, 15, 23, 255));
+        drawHeader(running, step_count, field, show_vectors, omega);
+        drawField(field, density, velocity_x, velocity_y);
+        if (show_vectors) drawVectors(velocity_x, velocity_y);
+    }
+}
+
+fn advance(
+    model: *fluid.FluidStep,
+    populations: *[population_count]f32,
+    force_x: *const [cell_count]f32,
+    force_y: *const [cell_count]f32,
+    omega: f32,
+) void {
+    model.copyInput(.f, populations) catch unreachable;
+    model.copyInput(.force_x, force_x) catch unreachable;
+    model.copyInput(.force_y, force_y) catch unreachable;
+    model.copyInput(.omega, &.{omega}) catch unreachable;
+    model.run();
+    @memcpy(populations, model.outputView(0).contiguousSlice().?);
+}
+
+fn updateForces(
+    force_x: *[cell_count]f32,
+    force_y: *[cell_count]f32,
+    previous_mouse: *rl.Vector2,
+    was_dragging: *bool,
+) void {
+    force_x.* = @splat(0);
+    force_y.* = @splat(0);
+
+    const mouse = rl.getMousePosition();
+    const dragging = rl.isMouseButtonDown(.left);
+    const grid_y = mouse.y - @as(f32, @floatFromInt(header_height));
+    const inside = mouse.x >= 0 and mouse.x < @as(f32, @floatFromInt(screen_width)) and
+        grid_y >= 0 and grid_y < @as(f32, @floatFromInt(fluid.H * cell_size));
+
+    if (dragging and was_dragging.* and inside) {
+        const grid_dx = (mouse.x - previous_mouse.x) / cell_size;
+        const grid_dy = (mouse.y - previous_mouse.y) / cell_size;
+        const impulse_x = std.math.clamp(grid_dx * 0.003, -0.012, 0.012);
+        const impulse_y = std.math.clamp(grid_dy * 0.003, -0.012, 0.012);
+        applyLocalizedForce(force_x, force_y, mouse.x / cell_size, grid_y / cell_size, impulse_x, impulse_y);
+    }
+
+    previous_mouse.* = mouse;
+    was_dragging.* = dragging and inside;
+}
+
+fn applyLocalizedForce(
+    force_x: *[cell_count]f32,
+    force_y: *[cell_count]f32,
+    center_x: f32,
+    center_y: f32,
+    impulse_x: f32,
+    impulse_y: f32,
+) void {
+    const width: f32 = @floatFromInt(fluid.W);
+    const height: f32 = @floatFromInt(fluid.H);
+    for (0..fluid.H) |y| {
+        for (0..fluid.W) |x| {
+            const xf: f32 = @floatFromInt(x);
+            const yf: f32 = @floatFromInt(y);
+            const direct_x = @abs(xf - center_x);
+            const direct_y = @abs(yf - center_y);
+            const dx = @min(direct_x, width - direct_x);
+            const dy = @min(direct_y, height - direct_y);
+            const falloff = @exp(-(dx * dx + dy * dy) / 64.0);
+            const index = y * fluid.W + x;
+            force_x[index] = impulse_x * falloff;
+            force_y[index] = impulse_y * falloff;
+        }
+    }
+}
+
+fn seedVortices(populations: *[population_count]f32) void {
+    const center_y: f32 = @as(f32, @floatFromInt(fluid.H)) * 0.5;
+    const left_x: f32 = @as(f32, @floatFromInt(fluid.W)) * 0.3;
+    const right_x: f32 = @as(f32, @floatFromInt(fluid.W)) * 0.7;
+    const radius_sq: f32 = 18.0 * 18.0;
+
+    for (0..fluid.H) |y| {
+        for (0..fluid.W) |x| {
+            const xf: f32 = @floatFromInt(x);
+            const yf: f32 = @floatFromInt(y);
+            const dy = yf - center_y;
+            const left_dx = xf - left_x;
+            const right_dx = xf - right_x;
+            const left_envelope = @exp(-(left_dx * left_dx + dy * dy) / radius_sq);
+            const right_envelope = @exp(-(right_dx * right_dx + dy * dy) / radius_sq);
+            const ux = 0.008 * dy * (right_envelope - left_envelope);
+            const uy = 0.008 * (left_dx * left_envelope - right_dx * right_envelope);
+            const speed_sq = ux * ux + uy * uy;
+
+            for (0..9) |direction| {
+                const dot = cx[direction] * ux + cy[direction] * uy;
+                populations[(y * fluid.W + x) * 9 + direction] = weights[direction] *
+                    (1.0 + 3.0 * dot + 4.5 * dot * dot - 1.5 * speed_sq);
+            }
+        }
+    }
+}
+
+fn drawHeader(running: bool, step_count: u64, field: Field, show_vectors: bool, omega: f32) void {
+    rl.drawRectangle(0, 0, screen_width, header_height, rl.Color.init(22, 30, 42, 255));
+    rl.drawText("D2Q9 lattice Boltzmann", 16, 8, 24, .ray_white);
+    rl.drawText("Space: pause  N: step  R: reset  V: speed/density  A: vectors", 16, 65, 16, .light_gray);
+    rl.drawText("Drag: stir  [ / ]: change omega", 16, 88, 16, .light_gray);
+
+    var status_buffer: [128]u8 = undefined;
+    const status = std.fmt.bufPrintZ(&status_buffer, "{s}  step {d}  {s}  vectors {s}  omega {d:.2}", .{
+        if (running) "running" else "paused",
+        step_count,
+        if (field == .speed) "speed" else "density",
+        if (show_vectors) "on" else "off",
+        omega,
+    }) catch unreachable;
+    rl.drawText(status, 16, 39, 15, if (running) .lime else .gold);
+}
+
+fn drawField(field: Field, density: []const f32, ux: []const f32, uy: []const f32) void {
+    for (0..cell_count) |index| {
+        const color = switch (field) {
+            .speed => speedColor(@sqrt(ux[index] * ux[index] + uy[index] * uy[index])),
+            .density => densityColor(density[index]),
+        };
+        const x = index % fluid.W;
+        const y = index / fluid.W;
+        rl.drawRectangle(@intCast(x * cell_size), @intCast(header_height + y * cell_size), cell_size, cell_size, color);
+    }
+}
+
+fn drawVectors(ux: []const f32, uy: []const f32) void {
+    const color = rl.Color.init(245, 248, 255, 220);
+    const cell_size_f: f32 = @floatFromInt(cell_size);
+    const header_f: f32 = @floatFromInt(header_height);
+    for (0..fluid.H / arrow_spacing) |row| {
+        for (0..fluid.W / arrow_spacing) |column| {
+            const x = column * arrow_spacing + arrow_spacing / 2;
+            const y = row * arrow_spacing + arrow_spacing / 2;
+            const index = y * fluid.W + x;
+            const vx = ux[index];
+            const vy = uy[index];
+            const speed = @sqrt(vx * vx + vy * vy);
+            if (speed < 0.002) continue;
+
+            const length = std.math.clamp(speed * 140.0, 2.0, 17.0);
+            const dx = vx / speed * length;
+            const dy = vy / speed * length;
+            const center = rl.Vector2.init((@as(f32, @floatFromInt(x)) + 0.5) * cell_size_f, header_f + (@as(f32, @floatFromInt(y)) + 0.5) * cell_size_f);
+            const tip = rl.Vector2.init(center.x + dx, center.y + dy);
+            const head_length: f32 = 4.0;
+            const side_x = -dy / length * head_length;
+            const side_y = dx / length * head_length;
+            const back_x = dx / length * head_length;
+            const back_y = dy / length * head_length;
+
+            rl.drawLineEx(center, tip, 1.5, color);
+            rl.drawLineEx(tip, rl.Vector2.init(tip.x - back_x + side_x, tip.y - back_y + side_y), 1.5, color);
+            rl.drawLineEx(tip, rl.Vector2.init(tip.x - back_x - side_x, tip.y - back_y - side_y), 1.5, color);
+        }
+    }
+}
+
+fn speedColor(speed: f32) rl.Color {
+    return colorRamp(std.math.clamp(speed / 0.12, 0.0, 1.0));
+}
+
+fn densityColor(density: f32) rl.Color {
+    return colorRamp(std.math.clamp(0.5 + (density - 1.0) * 8.0, 0.0, 1.0));
+}
+
+fn colorRamp(t: f32) rl.Color {
+    const cold = rl.Color.init(17, 42, 88, 255);
+    const middle = rl.Color.init(35, 190, 213, 255);
+    const hot = rl.Color.init(255, 224, 97, 255);
+    return if (t < 0.5) lerpColor(cold, middle, t * 2.0) else lerpColor(middle, hot, (t - 0.5) * 2.0);
+}
+
+fn lerpColor(a: rl.Color, b: rl.Color, t: f32) rl.Color {
+    return rl.Color.init(mixChannel(a.r, b.r, t), mixChannel(a.g, b.g, t), mixChannel(a.b, b.b, t), 255);
+}
+
+fn mixChannel(a: u8, b: u8, t: f32) u8 {
+    const start: f32 = @floatFromInt(a);
+    const end: f32 = @floatFromInt(b);
+    return @intFromFloat(start + (end - start) * t);
+}
+
+test "equilibrium seed keeps each cell near unit density" {
+    var populations: [population_count]f32 = undefined;
+    seedVortices(&populations);
+    for (0..cell_count) |cell| {
+        var density: f32 = 0;
+        for (0..9) |direction| density += populations[cell * 9 + direction];
+        try std.testing.expectApproxEqAbs(@as(f32, 1), density, 0.00001);
+    }
+}
+
+test "solver outputs remain finite after one rendered step" {
+    var model = fluid.FluidStep.init();
+    try model.copySource(.cx, &cx);
+    try model.copySource(.cy, &cy);
+    try model.copySource(.weights, &weights);
+
+    var populations: [population_count]f32 = undefined;
+    var force_x: [cell_count]f32 = @splat(0);
+    var force_y: [cell_count]f32 = @splat(0);
+    seedVortices(&populations);
+    advance(&model, &populations, &force_x, &force_y, 1.0);
+
+    const density = model.outputView(1).contiguousSlice().?;
+    const velocity_x = model.outputView(2).contiguousSlice().?;
+    const velocity_y = model.outputView(3).contiguousSlice().?;
+    for (0..cell_count) |cell| {
+        try std.testing.expect(std.math.isFinite(density[cell]));
+        try std.testing.expect(std.math.isFinite(velocity_x[cell]));
+        try std.testing.expect(std.math.isFinite(velocity_y[cell]));
+        try std.testing.expectApproxEqAbs(@as(f32, 1), density[cell], 0.0001);
+    }
+}
+
+test "runtime omega changes the collision result" {
+    var model = fluid.FluidStep.init();
+    try model.copySource(.cx, &cx);
+    try model.copySource(.cy, &cy);
+    try model.copySource(.weights, &weights);
+
+    var populations: [population_count]f32 = undefined;
+    var baseline: [population_count]f32 = undefined;
+    var force_x: [cell_count]f32 = undefined;
+    var force_y: [cell_count]f32 = undefined;
+    applyLocalizedForce(&force_x, &force_y, @floatFromInt(fluid.W / 2), @floatFromInt(fluid.H / 2), 0.01, 0);
+    seedVortices(&populations);
+
+    try model.copyInput(.f, &populations);
+    try model.copyInput(.force_x, &force_x);
+    try model.copyInput(.force_y, &force_y);
+    try model.copyInput(.omega, &.{0.6});
+    model.run();
+    @memcpy(&baseline, model.outputView(0).contiguousSlice().?);
+
+    try model.copyInput(.f, &populations);
+    try model.copyInput(.omega, &.{1.7});
+    model.run();
+    const changed = model.outputView(0).contiguousSlice().?;
+    var difference: f64 = 0;
+    for (baseline, changed) |a, b| difference += @abs(@as(f64, a) - @as(f64, b));
+    try std.testing.expect(difference > 0.01);
+}
+
+test "localized force is periodic and changes the solver state" {
+    var force_x: [cell_count]f32 = undefined;
+    var force_y: [cell_count]f32 = undefined;
+    applyLocalizedForce(&force_x, &force_y, 0, 0, 0.01, 0);
+    try std.testing.expect(force_x[0] > force_x[fluid.W / 2]);
+    try std.testing.expect(force_x[fluid.W - 1] > force_x[fluid.W / 2]);
+    try std.testing.expectEqual(@as(f32, 0), force_y[0]);
+
+    var model = fluid.FluidStep.init();
+    try model.copySource(.cx, &cx);
+    try model.copySource(.cy, &cy);
+    try model.copySource(.weights, &weights);
+    var populations: [population_count]f32 = undefined;
+    seedVortices(&populations);
+    advance(&model, &populations, &force_x, &force_y, 1.0);
+    var total_x_momentum: f64 = 0;
+    for (0..cell_count) |cell| {
+        for (0..9) |direction| {
+            total_x_momentum += @as(f64, populations[cell * 9 + direction]) * @as(f64, cx[direction]);
+        }
+    }
+    try std.testing.expect(total_x_momentum > 0.01);
+}
