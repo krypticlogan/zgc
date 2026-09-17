@@ -57,7 +57,7 @@ on Zig 0.16.0. The API should still be expected to change.
 | Comparisons | Broadcast equality and ordered comparisons producing boolean tensors |
 | Boolean/selection | Strict logical operations and broadcast `where` selection |
 | Copy/contiguous | Fresh storage with lowering-selected or logical row-major layout |
-| Pad/windows | Materialized constant boundaries and zero-copy overlapping trailing-axis windows |
+| Pad/shift/windows | Materialized constant padding, shifts with wrap/edge/reflect/constant boundaries, and zero-copy overlapping trailing-axis windows |
 | Matmul | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal |
 | Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, and strided traversal; mean is floating-point |
 | Softmax | Stable single-axis floating-point implementation, including strided axes |

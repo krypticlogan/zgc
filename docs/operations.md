@@ -64,12 +64,22 @@ retain a useful physical layout such as a batch-oriented layout.
 to use logical row-major strides. Both operations preserve shape and dtype and
 can materialize transposed, sliced, or broadcast views.
 
-## Padding and windows
+## Padding, shifting, and windows
 
 `pad(tensor, fill, options)` materializes constant padding around every input
 axis. `fill` must be a rank-zero tensor with the input dtype. `before` and
 `after` provide one compile-time width per input axis, and the result uses
 logical row-major storage.
+
+`shift(tensor, offsets, boundary)` translates values along every axis while
+preserving shape and dtype. `offsets` contains one compile-time signed value per
+axis; a positive offset moves an input value toward a higher output coordinate.
+Out-of-bounds source coordinates use one of four boundary modes: `wrap` (periodic),
+`edge` (repeat the nearest edge value), `reflect` (mirror without repeating the
+edge value), or `constant` (read a rank-zero fill tensor with the input dtype).
+For example, `shift(x, &.{1}, .wrap)` turns `[a,b,c]` into `[c,a,b]`;
+`shift(x, &.{1}, .reflect)` turns it into `[b,a,b]`. A size-one reflected axis
+always reads its only element. Shift results use distinct row-major storage.
 
 `windows(tensor, options)` creates one overlapping view across the trailing
 axes selected by `sizes`. The corresponding `strides` and `dilations` default
@@ -78,7 +88,7 @@ to one. For an input `[H, W]` and window sizes `[KH, KW]`, the output is
 axes, and the window axes are appended.
 
 Windows use valid geometry: every dilated window must fit within its input.
-Boundary behavior is expressed by padding the input first. The complete window
+Window boundary behavior can be expressed by padding the input first. The complete window
 tensor aliases one storage root; individual windows do not allocate storage.
 
 ## Matrix multiplication

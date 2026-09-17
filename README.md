@@ -24,7 +24,8 @@ The project targets Zig 0.16.0.
 - Unary math, arithmetic, comparison, logical, selection, matmul, reduction,
   softmax, and concatenation operations.
 - Explicit copy and row-major contiguous materialization.
-- Zero-copy overlapping windows over views.
+- Zero-copy overlapping windows over views and shape-preserving shifts with
+  wrap, edge, reflect, or constant boundaries.
 - Static-geometry model views and dynamic low-level views for contiguous,
   offset, broadcast, transposed, and generally strided layouts.
 - Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.

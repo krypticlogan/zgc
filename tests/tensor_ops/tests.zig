@@ -9,6 +9,7 @@ test {
     _ = @import("reduction.zig");
     _ = @import("predicate.zig");
     _ = @import("relu.zig");
+    _ = @import("shift.zig");
     _ = @import("softmax.zig");
     _ = @import("sub.zig");
     _ = @import("sum.zig");

@@ -6,6 +6,7 @@ const materialization = @import("kernels/materialization.zig");
 const padding = @import("kernels/padding.zig");
 const predicate = @import("kernels/predicate.zig");
 const reduction = @import("kernels/reduction.zig");
+const shifting = @import("kernels/shifting.zig");
 const special = @import("kernels/special.zig");
 
 /// Route graph operations to a kernel family.
@@ -37,6 +38,7 @@ pub fn execute(comptime op: Op.Compute, inputs: anytype, output: anytype) void {
         .where => predicate.where(inputs[0], inputs[1], inputs[2], output),
         .copy, .contiguous => materialization.copy(inputs[0], output),
         .pad => |attrs| padding.constant(inputs[0], inputs[1], output, attrs),
+        .shift => |attrs| shifting.shift(inputs, output, attrs),
         .matmul => |plan| contraction.matmulWithPlan(
             plan.strategy,
             inputs[0],

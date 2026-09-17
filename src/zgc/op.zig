@@ -40,6 +40,7 @@ pub const Op = union(enum) {
         copy,
         contiguous,
         pad: PadAttrs,
+        shift: ShiftAttrs,
         matmul: MatmulAttrs,
         sum: ReductionAttrs,
         mean: ReductionAttrs,
@@ -57,6 +58,12 @@ pub const Op = union(enum) {
         pub const PadAttrs = struct {
             before: []const usize,
             after: []const usize,
+        };
+        pub const ShiftAttrs = struct {
+            offsets: []const isize,
+            boundary: Boundary,
+
+            pub const Boundary = enum { wrap, edge, reflect, constant };
         };
         pub const MatmulAttrs = Matmul.Plan;
 
@@ -86,6 +93,7 @@ pub const Op = union(enum) {
                 .where => inferWhereRank(inputs),
                 .copy, .contiguous => inferUnaryRank(@tagName(op), inputs),
                 .pad => |attrs| inferPadRank(inputs, attrs),
+                .shift => |attrs| inferShiftRank(inputs, attrs),
                 .matmul => inferMatmulRank(inputs),
                 .sum => |attrs| inferNumericReductionRank("sum", inputs, attrs),
                 .mean => |attrs| blk: {
@@ -134,6 +142,10 @@ pub const Op = union(enum) {
                 .where => inferWhereShape(inputs, max_rank),
                 .copy, .contiguous => inferUnaryShape(@tagName(op), inputs, max_rank),
                 .pad => |attrs| inferPadShape(inputs, attrs, max_rank),
+                .shift => |attrs| blk: {
+                    _ = inferShiftRank(inputs, attrs);
+                    break :blk inputs[0].shape;
+                },
                 .matmul => inferMatmulShape(inputs, max_rank),
                 .sum => |attrs| inferNumericReductionShape("sum", inputs, attrs, max_rank),
                 .mean => |attrs| blk: {
@@ -388,6 +400,22 @@ fn inferPadRank(inputs: anytype, comptime attrs: Op.Compute.PadAttrs) usize {
     const rank = validation.rankOf(inputs[0]);
     if (attrs.before.len != rank or attrs.after.len != rank) {
         @compileError("pad requires one before and after width per input axis");
+    }
+    return rank;
+}
+
+fn inferShiftRank(inputs: anytype, comptime attrs: Op.Compute.ShiftAttrs) usize {
+    const constant = attrs.boundary == .constant;
+    validation.requireInputCount("shift", inputs, if (constant) 2 else 1);
+    const rank = validation.rankOf(inputs[0]);
+    if (attrs.offsets.len != rank) {
+        @compileError("shift requires one offset per input axis");
+    }
+    if (constant) {
+        validation.requireMatchingDtypes("shift", inputs);
+        if (validation.rankOf(inputs[1]) != 0) {
+            @compileError("shift constant fill value must be rank zero");
+        }
     }
     return rank;
 }

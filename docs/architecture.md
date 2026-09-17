@@ -170,6 +170,7 @@ Kernels are grouped by family:
 | Elementwise | ReLU, exp, neg, abs, sqrt, log, reciprocal, arithmetic, minimum, maximum, and clamp |
 | Predicate | Comparisons, strict boolean logic, and conditional selection |
 | Materialization | Logical copy, row-major conversion, and constant padding |
+| Shifting | Shape-preserving translation with wrap, edge, reflect, or constant boundaries |
 | Contraction | Rank-2 matmul |
 | Reduction | Sum, mean, min, and max over compile-time axis sets |
 | Special | Softmax over one axis |

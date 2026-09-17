@@ -316,6 +316,14 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
                 try writeDimensions(writer, attrs.after);
                 try writer.writeByte(')');
             },
+            .shift => |attrs| {
+                try writer.writeAll("shift(offsets=[");
+                for (attrs.offsets, 0..) |offset, axis| {
+                    if (axis != 0) try writer.writeByte(',');
+                    try writer.print("{d}", .{offset});
+                }
+                try writer.print("], boundary={s})", .{@tagName(attrs.boundary)});
+            },
             .matmul => |plan| try writer.print(
                 "matmul({s})",
                 .{@tagName(plan.strategy)},

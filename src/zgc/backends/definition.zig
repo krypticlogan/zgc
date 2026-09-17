@@ -98,6 +98,12 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
         pub const definition_limits = limits;
         pub const DefinitionOutput = DefinitionType;
         pub const TensorValue = ValueType;
+        pub const ShiftBoundary = union(enum) {
+            wrap,
+            edge,
+            reflect,
+            constant: ValueType,
+        };
 
         definition: DefinitionType = .{},
         used_sources: [source_capacity]bool = @splat(false),
@@ -283,6 +289,30 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
                 .before = options.before,
                 .after = options.after,
             } }, &.{ tensor, fill });
+        }
+
+        /// Materialize a translated tensor with one signed offset per axis.
+        /// Positive offsets move input values toward higher output coordinates.
+        pub fn shift(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime offsets: []const isize,
+            comptime boundary: ShiftBoundary,
+        ) ValueType {
+            const mode: Op.Compute.ShiftAttrs.Boundary = switch (boundary) {
+                .wrap => .wrap,
+                .edge => .edge,
+                .reflect => .reflect,
+                .constant => .constant,
+            };
+            const attrs: Op.Compute.ShiftAttrs = .{
+                .offsets = offsets,
+                .boundary = mode,
+            };
+            return switch (boundary) {
+                .constant => |fill| self.addCompute(.{ .shift = attrs }, &.{ tensor, fill }),
+                else => self.addCompute(.{ .shift = attrs }, &.{tensor}),
+            };
         }
 
         pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {

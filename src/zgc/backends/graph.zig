@@ -135,7 +135,7 @@ pub fn GraphBackend(
                 .where => preserveBatchLayout(graph, input_ids[1], shape),
                 .copy => preserveBatchLayout(graph, input_ids[0], shape),
                 .contiguous => .contiguous(shape),
-                .pad => .contiguous(shape),
+                .pad, .shift => .contiguous(shape),
                 .sum, .mean, .min, .max => .contiguous(shape),
                 .concat => .contiguous(shape),
             };

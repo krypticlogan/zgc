@@ -68,6 +68,8 @@ in the model's mutable memory plan.
 - Constant padding is materialized once per padded tensor. A window operation
   is an overlapping read-only alias with appended window axes and no separate
   allocation for individual windows.
+- Shifts materialize one shape-preserving output. Axis offsets and boundary mode
+  are compile-time attributes; constant fill may be a runtime scalar input.
 - Comparisons produce boolean tensors. Logical operations and selection
   conditions require boolean tensors; numeric values have no implicit
   truthiness conversion.
