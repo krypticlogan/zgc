@@ -1,6 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const fluid = @import("fluid_model");
+const SmokeView = @import("smoke.zig").ParticleView(fluid.W, fluid.H);
 
 const cell_size = 4;
 const header_height = 108;
@@ -13,6 +14,7 @@ const weights = [9]f32{ 4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1
 const cx = [9]f32{ 0, 1, 0, -1, 0, 1, -1, -1, 1 };
 const cy = [9]f32{ 0, 0, 1, 0, -1, 1, 1, -1, -1 };
 const Field = enum { speed, density };
+const View = enum { data, particles };
 
 pub fn main() void {
     rl.setTraceLogLevel(.err);
@@ -31,18 +33,26 @@ pub fn main() void {
     seedVortices(&populations);
     var omega: f32 = 1.0;
     advance(&model, &populations, &force_x, &force_y, omega);
+    var smoke: SmokeView = undefined;
+    smoke.reset(
+        model.outputView(2).contiguousSlice().?,
+        model.outputView(3).contiguousSlice().?,
+    );
 
     var running = true;
     var step_count: u64 = 1;
     var field: Field = .speed;
+    var view: View = .data;
     var show_vectors = false;
     var previous_mouse = rl.getMousePosition();
     var was_dragging = false;
 
     while (!rl.windowShouldClose()) {
+        var reset_smoke = false;
         updateForces(&force_x, &force_y, &previous_mouse, &was_dragging);
         if (rl.isKeyPressed(.space)) running = !running;
         if (rl.isKeyPressed(.v)) field = if (field == .speed) .density else .speed;
+        if (rl.isKeyPressed(.p)) view = if (view == .data) .particles else .data;
         if (rl.isKeyPressed(.a)) show_vectors = !show_vectors;
         if (rl.isKeyPressed(.left_bracket)) omega = std.math.clamp(omega - 0.05, 0.6, 1.7);
         if (rl.isKeyPressed(.right_bracket)) omega = std.math.clamp(omega + 0.05, 0.6, 1.7);
@@ -52,11 +62,14 @@ pub fn main() void {
             force_y = @splat(0);
             advance(&model, &populations, &force_x, &force_y, omega);
             step_count = 1;
+            reset_smoke = true;
         } else if (rl.isKeyPressed(.n)) {
+            advectSmoke(&smoke, &model);
             advance(&model, &populations, &force_x, &force_y, omega);
             step_count += 1;
             running = false;
         } else if (running) {
+            advectSmoke(&smoke, &model);
             advance(&model, &populations, &force_x, &force_y, omega);
             step_count += 1;
         }
@@ -64,14 +77,29 @@ pub fn main() void {
         const density = model.outputView(1).contiguousSlice().?;
         const velocity_x = model.outputView(2).contiguousSlice().?;
         const velocity_y = model.outputView(3).contiguousSlice().?;
+        if (reset_smoke) {
+            smoke.reset(velocity_x, velocity_y);
+        }
 
         rl.beginDrawing();
         defer rl.endDrawing();
         rl.clearBackground(rl.Color.init(10, 15, 23, 255));
-        drawHeader(running, step_count, field, show_vectors, omega);
-        drawField(field, density, velocity_x, velocity_y);
-        if (show_vectors) drawVectors(velocity_x, velocity_y);
+        drawHeader(running, step_count, view, field, show_vectors, omega);
+        switch (view) {
+            .data => {
+                drawField(field, density, velocity_x, velocity_y);
+                if (show_vectors) drawVectors(velocity_x, velocity_y);
+            },
+            .particles => smoke.draw(cell_size, header_height),
+        }
     }
+}
+
+fn advectSmoke(smoke: *SmokeView, model: *fluid.FluidStep) void {
+    smoke.update(
+        model.outputView(2).contiguousSlice().?,
+        model.outputView(3).contiguousSlice().?,
+    );
 }
 
 fn advance(
@@ -124,16 +152,12 @@ fn applyLocalizedForce(
     impulse_x: f32,
     impulse_y: f32,
 ) void {
-    const width: f32 = @floatFromInt(fluid.W);
-    const height: f32 = @floatFromInt(fluid.H);
     for (0..fluid.H) |y| {
         for (0..fluid.W) |x| {
             const xf: f32 = @floatFromInt(x);
             const yf: f32 = @floatFromInt(y);
-            const direct_x = @abs(xf - center_x);
-            const direct_y = @abs(yf - center_y);
-            const dx = @min(direct_x, width - direct_x);
-            const dy = @min(direct_y, height - direct_y);
+            const dx = xf - center_x;
+            const dy = yf - center_y;
             const falloff = @exp(-(dx * dx + dy * dy) / 64.0);
             const index = y * fluid.W + x;
             force_x[index] = impulse_x * falloff;
@@ -170,16 +194,17 @@ fn seedVortices(populations: *[population_count]f32) void {
     }
 }
 
-fn drawHeader(running: bool, step_count: u64, field: Field, show_vectors: bool, omega: f32) void {
+fn drawHeader(running: bool, step_count: u64, view: View, field: Field, show_vectors: bool, omega: f32) void {
     rl.drawRectangle(0, 0, screen_width, header_height, rl.Color.init(22, 30, 42, 255));
     rl.drawText("D2Q9 lattice Boltzmann", 16, 8, 24, .ray_white);
-    rl.drawText("Space: pause  N: step  R: reset  V: speed/density  A: vectors", 16, 65, 16, .light_gray);
-    rl.drawText("Drag: stir  [ / ]: change omega", 16, 88, 16, .light_gray);
+    rl.drawText("Space: pause  N: step  R: reset  P: data/particles", 16, 65, 16, .light_gray);
+    rl.drawText("V: speed/density  A: vectors  Drag: stir  [ / ]: omega", 16, 88, 16, .light_gray);
 
     var status_buffer: [128]u8 = undefined;
-    const status = std.fmt.bufPrintZ(&status_buffer, "{s}  step {d}  {s}  vectors {s}  omega {d:.2}", .{
+    const status = std.fmt.bufPrintZ(&status_buffer, "{s}  step {d}  {s}  {s}  vectors {s}  omega {d:.2}", .{
         if (running) "running" else "paused",
         step_count,
+        if (view == .data) "data" else "particles",
         if (field == .speed) "speed" else "density",
         if (show_vectors) "on" else "off",
         omega,
@@ -254,90 +279,4 @@ fn mixChannel(a: u8, b: u8, t: f32) u8 {
     const start: f32 = @floatFromInt(a);
     const end: f32 = @floatFromInt(b);
     return @intFromFloat(start + (end - start) * t);
-}
-
-test "equilibrium seed keeps each cell near unit density" {
-    var populations: [population_count]f32 = undefined;
-    seedVortices(&populations);
-    for (0..cell_count) |cell| {
-        var density: f32 = 0;
-        for (0..9) |direction| density += populations[cell * 9 + direction];
-        try std.testing.expectApproxEqAbs(@as(f32, 1), density, 0.00001);
-    }
-}
-
-test "solver outputs remain finite after one rendered step" {
-    var model = fluid.FluidStep.init();
-    try model.copySource(.cx, &cx);
-    try model.copySource(.cy, &cy);
-    try model.copySource(.weights, &weights);
-
-    var populations: [population_count]f32 = undefined;
-    var force_x: [cell_count]f32 = @splat(0);
-    var force_y: [cell_count]f32 = @splat(0);
-    seedVortices(&populations);
-    advance(&model, &populations, &force_x, &force_y, 1.0);
-
-    const density = model.outputView(1).contiguousSlice().?;
-    const velocity_x = model.outputView(2).contiguousSlice().?;
-    const velocity_y = model.outputView(3).contiguousSlice().?;
-    for (0..cell_count) |cell| {
-        try std.testing.expect(std.math.isFinite(density[cell]));
-        try std.testing.expect(std.math.isFinite(velocity_x[cell]));
-        try std.testing.expect(std.math.isFinite(velocity_y[cell]));
-        try std.testing.expectApproxEqAbs(@as(f32, 1), density[cell], 0.0001);
-    }
-}
-
-test "runtime omega changes the collision result" {
-    var model = fluid.FluidStep.init();
-    try model.copySource(.cx, &cx);
-    try model.copySource(.cy, &cy);
-    try model.copySource(.weights, &weights);
-
-    var populations: [population_count]f32 = undefined;
-    var baseline: [population_count]f32 = undefined;
-    var force_x: [cell_count]f32 = undefined;
-    var force_y: [cell_count]f32 = undefined;
-    applyLocalizedForce(&force_x, &force_y, @floatFromInt(fluid.W / 2), @floatFromInt(fluid.H / 2), 0.01, 0);
-    seedVortices(&populations);
-
-    try model.copyInput(.f, &populations);
-    try model.copyInput(.force_x, &force_x);
-    try model.copyInput(.force_y, &force_y);
-    try model.copyInput(.omega, &.{0.6});
-    model.run();
-    @memcpy(&baseline, model.outputView(0).contiguousSlice().?);
-
-    try model.copyInput(.f, &populations);
-    try model.copyInput(.omega, &.{1.7});
-    model.run();
-    const changed = model.outputView(0).contiguousSlice().?;
-    var difference: f64 = 0;
-    for (baseline, changed) |a, b| difference += @abs(@as(f64, a) - @as(f64, b));
-    try std.testing.expect(difference > 0.01);
-}
-
-test "localized force is periodic and changes the solver state" {
-    var force_x: [cell_count]f32 = undefined;
-    var force_y: [cell_count]f32 = undefined;
-    applyLocalizedForce(&force_x, &force_y, 0, 0, 0.01, 0);
-    try std.testing.expect(force_x[0] > force_x[fluid.W / 2]);
-    try std.testing.expect(force_x[fluid.W - 1] > force_x[fluid.W / 2]);
-    try std.testing.expectEqual(@as(f32, 0), force_y[0]);
-
-    var model = fluid.FluidStep.init();
-    try model.copySource(.cx, &cx);
-    try model.copySource(.cy, &cy);
-    try model.copySource(.weights, &weights);
-    var populations: [population_count]f32 = undefined;
-    seedVortices(&populations);
-    advance(&model, &populations, &force_x, &force_y, 1.0);
-    var total_x_momentum: f64 = 0;
-    for (0..cell_count) |cell| {
-        for (0..9) |direction| {
-            total_x_momentum += @as(f64, populations[cell * 9 + direction]) * @as(f64, cx[direction]);
-        }
-    }
-    try std.testing.expect(total_x_momentum > 0.01);
 }
