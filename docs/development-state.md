@@ -12,8 +12,8 @@ on Zig 0.16.0. The API should still be expected to change.
    traversal plans.
 4. Build convolution, pooling, and specialized stencil lowering over static
    padding and window geometry.
-5. Add graph optimization passes for constant folding, dead-node elimination,
-   operation fusion, and cost-based layout selection.
+5. Implement constant folding, common-subexpression elimination, dead-node
+   elimination, algebraic simplification, and store/epilogue sinking.
 6. Introduce explicitly bounded runtime extents where they preserve static
    kernel specialization and memory planning.
 
@@ -25,10 +25,16 @@ on Zig 0.16.0. The API should still be expected to change.
 - Models are defined once and compiled with `definition.model()`.
 - Internal counting derives exact capacities within configurable definition
   bounds.
-- Graph lowering preserves stable tensor IDs, source indices, operation order,
-  multiple outputs, shapes, dtypes, and layouts.
-- Lowered graphs are validated before model types are instantiated. Validation
-  includes inferred output geometry, dtypes, and matmul plan/layout contracts.
+- Raw graph construction preserves stable tensor IDs, source indices, operation
+  order, outputs, shapes, and dtypes.
+- Semantic optimization, fusion, layout planning, and kernel planning have
+  distinct pass boundaries. Final validation checks executable layouts and
+  kernel-plan contracts.
+- Executable programs use multi-output invocation records. Compatible sibling
+  reductions share one invocation and write independent results.
+- Generated model types retain raw and optimized graphs for inspection. Use
+  counts, output markers, and legal elementwise fusion edges are available from
+  graph analysis.
 - Lifetime analysis consolidates alias uses onto storage roots and provides
   half-open intervals to memory planning.
 - Invalid ranks, shapes, axes, dtypes, input counts, and broadcasting are
@@ -46,7 +52,7 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ### Operations
 
-| Operation | Current support |
+| Operation | Support |
 | --- | --- |
 | Scalar/full | Source-free rank-zero literals and zero-stride filled-tensor aliases |
 | ReLU | SIMD over matching dense layouts and generic strided traversal; float and signed integer |
@@ -101,9 +107,10 @@ on Zig 0.16.0. The API should still be expected to change.
 - Runtime-bound inputs currently report a missing binding when their view is
   first resolved during execution rather than through a separate run preflight.
 - Layout selection is limited to packed matmul right-hand parameters, the
-  matmul batch heuristic, and compatible result propagation. There is no
-  fusion, constant folding, dead-node elimination, or general cost-based graph
-  optimization pass yet.
+  matmul batch heuristic, and compatible result propagation. Fusion forms
+  single-consumer pointwise maps, producer-to-reduction regions, and compatible
+  sibling reductions. Constant folding, common-subexpression elimination,
+  dead-node elimination, and general cost-based planning are not implemented.
 - Softmax and reductions traverse propagated layouts correctly, but do not yet
   have a dedicated batch-oriented lowering and kernel strategy for every axis.
 - Matmul is a direct specialized kernel, not a tuned BLAS replacement.
@@ -116,7 +123,7 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ## Test coverage
 
-The test suite currently exercises:
+The test suite exercises:
 
 - typed definition construction and exact capacity counting;
 - source indexing, graph materialization, and multiple ranks/outputs;

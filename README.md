@@ -14,7 +14,8 @@ The project targets Zig 0.16.0.
 ## Capabilities
 
 - Front-facing `DefinitionBackend` with enum-indexed sources.
-- `definition.model()` for generating the graph, complete with validation and lowering.
+- `definition.model()` for semantic graph construction, validation, analysis,
+  optimization, and executable-model generation.
 - Exact graph capacities derived directly from the model.
 - Lifetime-planned, reusable inline model memory with no heap allocation during
   execution.
@@ -34,11 +35,13 @@ The project targets Zig 0.16.0.
 - Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 - Lean binaries and first-class inspection for any compiled tensor graph.
--
+
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
 
-#### *Note that this library is currently in active development and not entirely stable. The API may change without notice.*
+> [!Note]
+> ZGC is under active development. Public APIs and compiled-model contracts should be expected to
+> change before a stable release.
 
 ## Installation & usage
 
@@ -143,8 +146,8 @@ typed `copySource` API shown above.
 Parameters and constants may instead be embedded directly into the program:
 
 ```zig
-const EmbeddedModel = definition.modelWith(.{
-    .weights = zgc.Source.embed(@embedFile("weights.bin")),
+const EmbeddedModel = definition.modelWith(&.{
+    .{ .source = .weights, .binding = zgc.Source.embed(@embedFile("weights.bin")) },
 });
 ```
 
@@ -158,9 +161,9 @@ and do not receive a region in the model's mutable memory plan.
 Inputs can also borrow caller-owned runtime storage without a copy:
 
 ```zig
-const BorrowingModel = definition.modelWith(.{
-    .input = zgc.Source.bound,
-    .weights = zgc.Source.embed(@embedFile("weights.bin")),
+const BorrowingModel = definition.modelWith(&.{
+    .{ .source = .input, .binding = zgc.Source.bound },
+    .{ .source = .weights, .binding = zgc.Source.embed(@embedFile("weights.bin")) },
 });
 
 var model = BorrowingModel.init();
@@ -221,9 +224,11 @@ https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
 
 | Path | Purpose |
 | --- | --- |
-| `src/zgc/backends/` | Definition, exact counting, graph lowering, validation, and pipeline orchestration |
+| `src/zgc/backends/` | Definition, counting, raw graph construction, analysis, optimization, validation, and pipeline orchestration |
+| `src/zgc/operations/` | Semantic operation definitions and reusable operation-family descriptors |
+| `src/zgc/optimization/` | Executable plans and optimization-specific representations |
 | `src/zgc/kernels/` | Elementwise, reduction, contraction, layout, and special kernels |
-| `src/zgc/` | Graph, tensor/view, operation, storage, and executable-model machinery |
+| `src/zgc/` | Graph, tensor/view, storage, execution, and generated-model machinery |
 | `src/cli/` | Model-specific command-line entry points |
 | `src/artifact/` | Generated-model artifact entry points |
 | `src/extensions/` | Core-backed domain abstractions exported as `zgc.nn` and `zgc.img` |
