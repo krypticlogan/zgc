@@ -36,7 +36,12 @@ const Model = definition.model();
 test "dense layers build a sequential core graph" {
     const graph = Model.build_graph;
 
-    try std.testing.expectEqual(@as(usize, 6), graph.node_ct);
+    try std.testing.expectEqual(@as(usize, 6), Model.semantic_graph.node_ct);
+    try std.testing.expectEqual(@as(usize, 5), graph.node_ct);
+    switch (graph.nodes[1].?.op.compute.kernel) {
+        .map => |plan| try std.testing.expectEqual(@as(usize, 2), plan.region.expressions.instructions.len),
+        else => return error.TestUnexpectedResult,
+    }
     try std.testing.expectEqualSlices(
         usize,
         &.{ 2, 2 },

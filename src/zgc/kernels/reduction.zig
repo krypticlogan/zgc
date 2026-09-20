@@ -1,8 +1,8 @@
 const accumulation = @import("accumulation.zig");
 const Dtype = @import("../dtype.zig").Dtype;
-const Op = @import("../op.zig").Op;
+const Op = @import("../operations/semantic.zig").Op;
+const ReductionOperation = @import("../operations/reduction.zig");
 const line = @import("line.zig");
-const std = @import("std");
 
 pub fn sum(input: anytype, output: anytype, comptime attrs: Op.Compute.ReductionAttrs) void {
     if (comptime @popCount(attrs.axes) == 1 and !attrs.keep_dims) {
@@ -90,59 +90,34 @@ fn axisIsReduced(comptime axes: u64, comptime axis: usize) bool {
     return axes & (@as(u64, 1) << @intCast(axis)) != 0;
 }
 
-const Sum = struct {
-    fn identity(comptime dtype: Dtype) accumulation.AccumulatorScalar(dtype) {
-        return 0;
-    }
-    fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {
-        return accumulator + accumulation.widenScalar(dtype, value);
-    }
-    fn finish(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), _: usize) dtype.Scalar() {
-        return accumulation.narrowScalar(dtype, accumulator);
-    }
-};
+fn ReductionOperator(
+    comptime combine_kind: ReductionOperation.Combine,
+    comptime finalizer: ReductionOperation.Finalize,
+) type {
+    return struct {
+        fn identity(comptime dtype: Dtype) accumulation.AccumulatorScalar(dtype) {
+            return accumulation.identity(dtype, combine_kind);
+        }
 
-const Mean = struct {
-    fn identity(comptime dtype: Dtype) accumulation.AccumulatorScalar(dtype) {
-        return Sum.identity(dtype);
-    }
-    fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {
-        return Sum.combine(dtype, accumulator, value);
-    }
-    fn finish(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), count: usize) dtype.Scalar() {
-        const divisor: accumulation.AccumulatorScalar(dtype) = @floatFromInt(count);
-        return accumulation.narrowScalar(dtype, accumulator / divisor);
-    }
-};
+        fn combine(
+            comptime dtype: Dtype,
+            accumulator: accumulation.AccumulatorScalar(dtype),
+            value: dtype.Scalar(),
+        ) accumulation.AccumulatorScalar(dtype) {
+            return accumulation.combine(dtype, combine_kind, accumulator, value);
+        }
 
-const Min = struct {
-    fn identity(comptime dtype: Dtype) accumulation.AccumulatorScalar(dtype) {
-        return switch (comptime dtype.kind()) {
-            .float => std.math.inf(accumulation.AccumulatorScalar(dtype)),
-            .signed_integer => std.math.maxInt(accumulation.AccumulatorScalar(dtype)),
-            .boolean => @compileError("boolean tensors cannot be reduced with min"),
-        };
-    }
-    fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {
-        return @min(accumulator, accumulation.widenScalar(dtype, value));
-    }
-    fn finish(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), _: usize) dtype.Scalar() {
-        return accumulation.narrowScalar(dtype, accumulator);
-    }
-};
+        fn finish(
+            comptime dtype: Dtype,
+            accumulator: accumulation.AccumulatorScalar(dtype),
+            count: usize,
+        ) dtype.Scalar() {
+            return accumulation.finish(dtype, finalizer, accumulator, count);
+        }
+    };
+}
 
-const Max = struct {
-    fn identity(comptime dtype: Dtype) accumulation.AccumulatorScalar(dtype) {
-        return switch (comptime dtype.kind()) {
-            .float => -std.math.inf(accumulation.AccumulatorScalar(dtype)),
-            .signed_integer => std.math.minInt(accumulation.AccumulatorScalar(dtype)),
-            .boolean => @compileError("boolean tensors cannot be reduced with max"),
-        };
-    }
-    fn combine(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), value: dtype.Scalar()) accumulation.AccumulatorScalar(dtype) {
-        return @max(accumulator, accumulation.widenScalar(dtype, value));
-    }
-    fn finish(comptime dtype: Dtype, accumulator: accumulation.AccumulatorScalar(dtype), _: usize) dtype.Scalar() {
-        return accumulation.narrowScalar(dtype, accumulator);
-    }
-};
+const Sum = ReductionOperator(.sum, .identity);
+const Mean = ReductionOperator(.sum, .mean);
+const Min = ReductionOperator(.minimum, .identity);
+const Max = ReductionOperator(.maximum, .identity);

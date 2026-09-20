@@ -1,11 +1,13 @@
 const std = @import("std");
-const Op = @import("op.zig").Op;
+const Execution = @import("execution.zig");
+const Op = @import("operations/semantic.zig").Op;
 const Tensor = @import("tensor.zig");
 
 const Writer = std.Io.Writer;
 
 pub const Sections = struct {
     capacity: bool = true,
+    raw_graph: bool = true,
     graph: bool = true,
     structure: bool = true,
     memory_plan: bool = true,
@@ -21,17 +23,22 @@ pub fn writeModel(
         try writer.writeAll("== Capacity ==\n");
         try writeCapacity(writer, Model.internal_capacity);
     }
-    if (sections.graph) {
+    if (sections.raw_graph) {
         if (sections.capacity) try writer.writeByte('\n');
+        try writer.writeAll("== Raw graph ==\n");
+        try writeGraph(writer, Model.raw_graph);
+    }
+    if (sections.graph) {
+        if (sections.capacity or sections.raw_graph) try writer.writeByte('\n');
         try writer.writeAll("== Graph ==\n");
         try writeGraph(writer, Model.build_graph);
     }
     if (sections.structure) {
-        if (sections.capacity or sections.graph) try writer.writeByte('\n');
+        if (sections.capacity or sections.raw_graph or sections.graph) try writer.writeByte('\n');
         try writeGraphStructure(writer, Model.build_graph);
     }
     if (sections.memory_plan) {
-        if (sections.capacity or sections.graph or sections.structure) {
+        if (sections.capacity or sections.raw_graph or sections.graph or sections.structure) {
             try writer.writeByte('\n');
         }
         try writer.writeAll("== Memory plan ==\n");
@@ -76,7 +83,7 @@ pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {
     try writer.writeAll("Nodes:\n");
     for (graph.nodes[0..graph.node_ct], 0..) |maybe_node, id| {
         const node = maybe_node.?;
-        try writer.print("  n{d} [{s}]: ", .{ id, @tagName(node.kind) });
+        try writer.print("  n{d} [{s}]: ", .{ id, @tagName(node.op.kind()) });
         try writeOp(writer, node.op);
         try writer.writeByte('(');
         for (0..node.input_count) |input_index| {
@@ -84,7 +91,18 @@ pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {
             const ref = graph.input_refs[node.input_start + input_index].?;
             try writer.print("t{d}", .{ref});
         }
-        try writer.print(") -> t{d}\n", .{node.result});
+        try writer.writeAll(") -> ");
+        if (comptime @hasField(@TypeOf(node), "result")) {
+            try writer.print("t{d}\n", .{node.result});
+        } else {
+            try writer.writeByte('[');
+            for (0..node.output_count) |output_index| {
+                if (output_index != 0) try writer.writeAll(", ");
+                const ref = graph.output_refs[node.output_start + output_index].?;
+                try writer.print("t{d}", .{ref});
+            }
+            try writer.writeAll("]\n");
+        }
     }
 
     try writer.writeAll("Outputs: [");
@@ -183,6 +201,61 @@ pub fn writeModelMemory(model: anytype, writer: *Writer, byte_limit: usize) Writ
 
 /// Parse and render one static model-inspection command. Returns false after
 /// writing usage information for an invalid command.
+pub fn runModuleCli(
+    comptime ModelModule: type,
+    args: []const []const u8,
+    writer: *Writer,
+) Writer.Error!bool {
+    const model_count = comptime inspectableModelCount(ModelModule);
+    var command_args = args;
+    var requested_model: ?[]const u8 = null;
+
+    if (args.len > 0 and std.mem.eql(u8, args[0], "--model")) {
+        if (args.len < 2) {
+            try writer.writeAll("--model requires an exported model declaration\n\n");
+            try writeModuleCliUsage(ModelModule, writer);
+            return false;
+        }
+        requested_model = args[1];
+        command_args = args[2..];
+    }
+
+    if (requested_model) |name| {
+        inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
+            const Candidate = @field(ModelModule, declaration.name);
+            if (comptime isInspectableModel(Candidate)) {
+                if (std.mem.eql(u8, name, declaration.name)) {
+                    return runCli(Candidate, command_args, writer);
+                }
+            }
+        }
+
+        try writer.print("unknown model declaration: {s}\n\n", .{name});
+        try writeModuleCliUsage(ModelModule, writer);
+        return false;
+    }
+
+    if (model_count == 1) {
+        inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
+            const Candidate = @field(ModelModule, declaration.name);
+            if (comptime isInspectableModel(Candidate)) {
+                return runCli(Candidate, command_args, writer);
+            }
+        }
+    }
+
+    if (model_count == 0) {
+        try writer.writeAll("the imported model module exports no inspectable models\n");
+        return false;
+    }
+
+    try writer.writeAll("the imported module exports multiple models; select one with --model\n\n");
+    try writeModuleCliUsage(ModelModule, writer);
+    return false;
+}
+
+/// Parse and render one static model-inspection command. Returns false after
+/// writing usage information for an invalid command.
 pub fn runCli(
     comptime Model: type,
     args: []const []const u8,
@@ -199,10 +272,25 @@ pub fn runCli(
     if (std.mem.eql(u8, command, "summary")) {
         try writeModel(Model, writer, .{
             .graph = false,
+            .raw_graph = false,
             .structure = false,
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "graph")) {
+        try writeModel(Model, writer, .{
+            .capacity = false,
+            .raw_graph = false,
+            .structure = false,
+            .memory_plan = false,
+        });
+    } else if (std.mem.eql(u8, command, "raw-graph")) {
+        try writeModel(Model, writer, .{
+            .capacity = false,
+            .graph = false,
+            .structure = false,
+            .memory_plan = false,
+        });
+    } else if (std.mem.eql(u8, command, "graphs")) {
         try writeModel(Model, writer, .{
             .capacity = false,
             .structure = false,
@@ -211,12 +299,14 @@ pub fn runCli(
     } else if (std.mem.eql(u8, command, "tree")) {
         try writeModel(Model, writer, .{
             .capacity = false,
+            .raw_graph = false,
             .graph = false,
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "memory-plan")) {
         try writeModel(Model, writer, .{
             .capacity = false,
+            .raw_graph = false,
             .graph = false,
             .structure = false,
         });
@@ -230,16 +320,46 @@ pub fn runCli(
 
 pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
     try writer.writeAll(
-        \\usage: zgc-inspect [all|summary|graph|tree|memory-plan|help]
+        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|graph|graphs|tree|memory-plan|help]
         \\
         \\  all          capacity, graph, tree, and memory plan (default)
         \\  summary      exact graph capacity
-        \\  graph        tensor and operation listing
+        \\  raw-graph    semantic graph before optimization
+        \\  graph        optimized executable graph
+        \\  graphs       raw and optimized graph listings
         \\  tree         output-oriented graph structure
         \\  memory-plan  owned, bound, and embedded tensor storage
         \\  help         show this message
         \\
     );
+}
+
+pub fn writeModuleCliUsage(comptime ModelModule: type, writer: *Writer) Writer.Error!void {
+    try writeCliUsage(writer);
+    try writer.writeAll("\ninspectable model declarations:\n");
+    inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
+        const Candidate = @field(ModelModule, declaration.name);
+        if (comptime isInspectableModel(Candidate)) {
+            try writer.print("  {s}\n", .{declaration.name});
+        }
+    }
+}
+
+fn inspectableModelCount(comptime ModelModule: type) usize {
+    var count: usize = 0;
+    for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
+        if (isInspectableModel(@field(ModelModule, declaration.name))) count += 1;
+    }
+    return count;
+}
+
+fn isInspectableModel(comptime Candidate: anytype) bool {
+    if (@TypeOf(Candidate) != type) return false;
+    return @hasDecl(Candidate, "internal_capacity") and
+        @hasDecl(Candidate, "raw_graph") and
+        @hasDecl(Candidate, "build_graph") and
+        @hasDecl(Candidate, "memory_plan") and
+        @hasDecl(Candidate, "source_plan");
 }
 
 fn invalidCommand(writer: *Writer, command: []const u8) Writer.Error!bool {
@@ -280,7 +400,31 @@ fn writeShape(writer: *Writer, shape: anytype) Writer.Error!void {
     try writer.writeByte(']');
 }
 
-fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
+fn writeOp(writer: *Writer, op: anytype) Writer.Error!void {
+    if (comptime @TypeOf(op) == Op) return writeSemanticOp(writer, op);
+    if (comptime @TypeOf(op) == Execution.Op) {
+        return switch (op) {
+            .view => |view| writeSemanticOp(writer, .{ .view = view }),
+            .compute => |compute| switch (compute) {
+                .direct => |semantic| writeSemanticOp(writer, .{ .compute = semantic }),
+                .kernel => |plan| switch (plan) {
+                    .map => |map| writeElementwiseProgram(writer, map.region.expressions),
+                    .reduction => |reduction| writer.print(
+                        "reduction(accumulators={d}, stores={d})",
+                        .{ reduction.region.accumulators.len, reduction.region.stores.len },
+                    ),
+                    .contraction => |contraction| writer.print(
+                        "matmul({s})",
+                        .{@tagName(contraction.strategy)},
+                    ),
+                },
+            },
+        };
+    }
+    @compileError("inspection does not support operation type " ++ @typeName(@TypeOf(op)));
+}
+
+fn writeSemanticOp(writer: *Writer, op: Op) Writer.Error!void {
     switch (op) {
         .compute => |compute| switch (compute) {
             .relu => try writer.writeAll("relu"),
@@ -324,10 +468,7 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
                 }
                 try writer.print("], boundary={s})", .{@tagName(attrs.boundary)});
             },
-            .matmul => |plan| try writer.print(
-                "matmul({s})",
-                .{@tagName(plan.strategy)},
-            ),
+            .matmul => try writer.writeAll("matmul"),
             .sum => |attrs| try writeReduction(writer, "sum", attrs),
             .mean => |attrs| try writeReduction(writer, "mean", attrs),
             .min => |attrs| try writeReduction(writer, "min", attrs),
@@ -367,6 +508,15 @@ fn writeOp(writer: *Writer, op: Op) Writer.Error!void {
             },
         },
     }
+}
+
+fn writeElementwiseProgram(writer: *Writer, program: @import("optimization/fusion/expression.zig").Program) Writer.Error!void {
+    try writer.writeAll("fused_elementwise[");
+    for (program.instructions, 0..) |instruction, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writer.print("{s}", .{@tagName(instruction.operation)});
+    }
+    try writer.writeByte(']');
 }
 
 fn writeDimensions(writer: *Writer, dimensions: []const usize) Writer.Error!void {
@@ -413,6 +563,10 @@ fn writeTensorTree(
     const producer_id = switch (info.origin) {
         .node => |node| node,
         .source => |source_index| {
+            if (comptime graph.sources.len == 0) {
+                try writer.writeAll(" (invalid source)\n");
+                return;
+            }
             const source = graph.sources[source_index].?;
             try writer.print(" (source[{d}])={s}\n", .{ source_index, @tagName(source.kind) });
             return;
@@ -440,7 +594,7 @@ fn writeTensorTree(
 
     const node = graph.nodes[producer_id].?;
     try writeTreePrefix(writer, depth + 1, true, ancestor_is_last);
-    try writer.print("n{d} [{s}] ", .{ producer_id, @tagName(node.kind) });
+    try writer.print("n{d} [{s}] ", .{ producer_id, @tagName(node.op.kind()) });
     try writeOp(writer, node.op);
     try writer.writeByte('\n');
 

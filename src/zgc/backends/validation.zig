@@ -1,18 +1,17 @@
 const std = @import("std");
 const Graph = @import("../graph.zig");
+const Op = @import("../operations/semantic.zig").Op;
 const Tensor = @import("../tensor.zig");
 const layout_ops = @import("../kernels/layout.zig");
 
-/// Validates the fully lowered graph before model types and executable kernels
-/// are instantiated. Kernels may rely on these contracts without repeating
-/// shape, dtype, rank, or layout checks.
+/// Validates the raw semantic graph before analysis and optimization.
 pub fn ValidationBackend(comptime capacity: Graph.Capacity) type {
     return struct {
-        pub fn validate(comptime lowered_graph: Graph.Graph(capacity)) type {
+        pub fn validate(comptime lowered_graph: Graph.Graph(capacity, Op)) type {
             inline for (0..lowered_graph.node_ct) |node_id| {
                 const node = lowered_graph.nodes[node_id].?;
                 const output = lowered_graph.tensors[node.result].?;
-                const Inputs = [node.input_count]Graph.Graph(capacity).TensorInfo;
+                const Inputs = [node.input_count]Graph.Graph(capacity, Op).TensorInfo;
                 var inputs: Inputs = undefined;
                 inline for (0..node.input_count) |input_index| {
                     const tensor_id = lowered_graph.input_refs[node.input_start + input_index].?;
@@ -45,10 +44,6 @@ pub fn ValidationBackend(comptime capacity: Graph.Capacity) type {
                         if (output.dtype != expected_dtype) {
                             @compileError("lowered operation output dtype does not match its inferred dtype");
                         }
-                        switch (compute) {
-                            .matmul => |plan| validateMatmulPlan(plan.strategy, inputs[0], inputs[1], output),
-                            else => {},
-                        }
                     },
                 }
             }
@@ -75,30 +70,13 @@ pub fn ValidationBackend(comptime capacity: Graph.Capacity) type {
                     );
                 }
 
-                fn tensorInfo(comptime tensor_id: Tensor.Id) Graph.Graph(capacity).TensorInfo {
+                fn tensorInfo(comptime tensor_id: Tensor.Id) Graph.Graph(capacity, Op).TensorInfo {
                     if (tensor_id >= graph.tensor_ct) {
                         @compileError("tensor id is outside the validated graph");
                     }
                     return graph.tensors[tensor_id].?;
                 }
             };
-        }
-
-        fn validateMatmulPlan(
-            comptime strategy: @import("../matmul.zig").Strategy,
-            comptime lhs: Graph.Graph(capacity).TensorInfo,
-            comptime rhs: Graph.Graph(capacity).TensorInfo,
-            comptime output: Graph.Graph(capacity).TensorInfo,
-        ) void {
-            const compatible = switch (strategy) {
-                .output_columns => rhs.layout.strides[1] == 1 and output.layout.strides[1] == 1,
-                .contracted_axis => lhs.layout.strides[1] == 1 and rhs.layout.strides[0] == 1,
-                .output_rows => lhs.layout.strides[0] == 1 and output.layout.strides[0] == 1,
-                .scalar => true,
-            };
-            if (!compatible) {
-                @compileError("lowered matmul strategy is incompatible with its tensor layouts");
-            }
         }
     };
 }

@@ -1,25 +1,17 @@
 const Tensor = @import("tensor.zig");
 const Dtype = @import("storage.zig").Dtype;
 const Shape_T = Tensor.Shape_T;
-const Op = @import("op.zig").Op;
-
-pub const Node = struct {
-    pub const Id = usize;
-    op: Op,
-    input_start: usize,
-    input_count: usize,
-    result: Tensor.Id,
-
-    kind: Kind,
-
-    pub const Kind = Op.Kind;
-};
-
-pub fn Graph(comptime capacity: Capacity) type {
+pub fn Graph(comptime capacity: Capacity, comptime Operation: type) type {
     return struct {
         const Self = @This();
         pub const max_rank = capacity.max_rank;
         pub const TensorInfo = Tensor.Info(max_rank);
+        pub const Node = struct {
+            op: Operation,
+            input_start: usize,
+            input_count: usize,
+            result: Tensor.Id,
+        };
 
         nodes: [capacity.max_nodes]?Node = .{null} ** capacity.max_nodes,
         tensors: [capacity.max_tensors]?TensorInfo = .{null} ** capacity.max_tensors,

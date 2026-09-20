@@ -1,8 +1,9 @@
 const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
 const ScalarValue = @import("../dtype.zig").ScalarValue;
-const op_module = @import("../op.zig");
+const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
+const SourceStorage = @import("../source.zig");
 const Tensor = @import("../tensor.zig");
 
 pub const Limits = struct {
@@ -16,24 +17,45 @@ pub const Limits = struct {
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
 /// removed unless `keep_dims` retains them as singleton dimensions.
 pub const ReductionOptions = struct {
+    /// Axes to reduce. `null` reduces every axis.
     axes: ?[]const i8 = null,
+    /// Preserve reduced axes as extent-one dimensions.
     keep_dims: bool = false,
 };
 
 pub const FlattenOptions = struct {
+    /// First axis in the inclusive flattened range.
     start_axis: i8 = 0,
+    /// Last axis in the inclusive flattened range.
     end_axis: i8 = -1,
 };
 
 pub const SliceOptions = struct {
+    /// Axis containing the selected range.
     axis: i8,
+    /// Inclusive range start.
     start: usize = 0,
+    /// Exclusive range end. `null` selects through the axis extent.
     end: ?usize = null,
+    /// Positive distance between selected elements.
     step: usize = 1,
 };
 
-pub const PadOptions = Op.Compute.PadAttrs;
-pub const WindowOptions = Op.View.WindowAttrs;
+pub const PadOptions = struct {
+    /// Padding width before each input axis.
+    before: []const usize,
+    /// Padding width after each input axis.
+    after: []const usize,
+};
+
+pub const WindowOptions = struct {
+    /// Window extent over each selected trailing axis.
+    sizes: []const usize,
+    /// Step between adjacent window origins. Defaults to one per axis.
+    strides: ?[]const usize = null,
+    /// Spacing between elements within each window. Defaults to one per axis.
+    dilations: ?[]const usize = null,
+};
 
 pub fn Value(comptime max_rank: usize) type {
     return struct {
@@ -49,6 +71,12 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
         pub const max_rank = limits.max_rank;
         pub const Source = SourceKey;
         pub const ValueType = Value(max_rank);
+        pub const SourceOverride = struct {
+            /// Source enum tag whose default ownership policy is replaced.
+            source: SourceKey,
+            /// Storage policy applied to the selected source.
+            binding: SourceStorage.Binding,
+        };
 
         const Node = struct {
             op: Op,
@@ -75,12 +103,15 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
         pub fn model(comptime definition: Self) type {
-            return @import("pipeline.zig").model(Self, definition, .{});
+            return @import("pipeline.zig").model(
+                Self,
+                definition,
+                @as([]const SourceOverride, &.{}),
+            );
         }
 
-        /// Compile this definition with named source-storage overrides. Fields
-        /// use SourceKey tag names and values from `zgc.Source`.
-        pub fn modelWith(comptime definition: Self, comptime sources: anytype) type {
+        /// Compile this definition with typed source-storage overrides.
+        pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
             return @import("pipeline.zig").model(Self, definition, sources);
         }
     };
@@ -98,6 +129,7 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
         pub const definition_limits = limits;
         pub const DefinitionOutput = DefinitionType;
         pub const TensorValue = ValueType;
+        pub const SourceOverride = DefinitionType.SourceOverride;
         pub const ShiftBoundary = union(enum) {
             wrap,
             edge,
@@ -134,7 +166,7 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             return self.addSource(source_key, .constant, dtype, shape);
         }
 
-        pub fn scalar(self: *Self, comptime dtype: Dtype, comptime value: anytype) ValueType {
+        pub fn scalar(self: *Self, comptime dtype: Dtype, comptime value: dtype.Scalar()) ValueType {
             if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
             const tensor_id = self.definition.tensor_count;
             const tensor_value: ValueType = .{
@@ -154,7 +186,7 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             self: *Self,
             comptime dtype: Dtype,
             comptime extents: []const usize,
-            comptime value: anytype,
+            comptime value: dtype.Scalar(),
         ) ValueType {
             const scalar_value = self.scalar(dtype, value);
             if (extents.len == 0) return scalar_value;
@@ -316,23 +348,23 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
         }
 
         pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.{ .matmul = .{ .strategy = .scalar } }, &.{ lhs, rhs });
+            return self.addCompute(.matmul, &.{ lhs, rhs });
         }
 
-        pub fn sum(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
-            return self.addCompute(.{ .sum = reductionAttrs(tensor, spec) }, &.{tensor});
+        pub fn sum(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
+            return self.addCompute(.{ .sum = reductionAttrs(tensor, options) }, &.{tensor});
         }
 
-        pub fn mean(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
-            return self.addCompute(.{ .mean = reductionAttrs(tensor, spec) }, &.{tensor});
+        pub fn mean(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
+            return self.addCompute(.{ .mean = reductionAttrs(tensor, options) }, &.{tensor});
         }
 
-        pub fn min(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
-            return self.addCompute(.{ .min = reductionAttrs(tensor, spec) }, &.{tensor});
+        pub fn min(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
+            return self.addCompute(.{ .min = reductionAttrs(tensor, options) }, &.{tensor});
         }
 
-        pub fn max(self: *Self, comptime tensor: ValueType, comptime spec: anytype) ValueType {
-            return self.addCompute(.{ .max = reductionAttrs(tensor, spec) }, &.{tensor});
+        pub fn max(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
+            return self.addCompute(.{ .max = reductionAttrs(tensor, options) }, &.{tensor});
         }
 
         pub fn concat(
@@ -618,34 +650,21 @@ pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type
             self.definition.tensor_count += 1;
             return value;
         }
+
+        fn reductionAttrs(comptime tensor: ValueType, comptime options: ReductionOptions) Op.Compute.ReductionAttrs {
+            return .{
+                .axes = reductionAxesMask(tensor.shape.rank, options.axes),
+                .keep_dims = options.keep_dims,
+            };
+        }
     };
 }
 
-fn reductionAttrs(comptime tensor: anytype, comptime spec: anytype) Op.Compute.ReductionAttrs {
-    const Spec = @TypeOf(spec);
-    const info = @typeInfo(Spec);
-    if (info == .int or info == .comptime_int) {
-        return .{ .axes = axisMask(tensor.shape.rank, spec) };
-    }
-    if (info != .@"struct" or !@hasField(Spec, "axes")) {
-        @compileError("reduction expects an axis or options containing axes and optional keep_dims");
-    }
-
-    const keep_dims = if (@hasField(Spec, "keep_dims")) spec.keep_dims else false;
-    const axes_mask = reductionAxesMask(tensor.shape.rank, spec.axes);
-    return .{ .axes = axes_mask, .keep_dims = keep_dims };
+fn reductionAxesMask(comptime rank: usize, comptime axes: ?[]const i8) u64 {
+    return if (axes) |explicit| explicitAxesMask(rank, explicit) else allAxesMask(rank);
 }
 
-fn reductionAxesMask(comptime rank: usize, comptime axes_spec: anytype) u64 {
-    return switch (@typeInfo(@TypeOf(axes_spec))) {
-        .optional => if (axes_spec) |axes| explicitAxesMask(rank, axes) else allAxesMask(rank),
-        .null => allAxesMask(rank),
-        .pointer, .array => explicitAxesMask(rank, axes_spec),
-        else => @compileError("reduction axes must be a slice, array, or null"),
-    };
-}
-
-fn explicitAxesMask(comptime rank: usize, comptime axes: anytype) u64 {
+fn explicitAxesMask(comptime rank: usize, comptime axes: []const i8) u64 {
     if (axes.len == 0) @compileError("reduction axes cannot be empty");
     var result: u64 = 0;
     for (axes) |axis| {
@@ -661,12 +680,12 @@ fn allAxesMask(comptime rank: usize) u64 {
     return if (rank == 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(rank)) - 1;
 }
 
-fn axisMask(comptime rank: usize, comptime requested_axis: anytype) u64 {
+fn axisMask(comptime rank: usize, comptime requested_axis: i8) u64 {
     if (rank == 0 or rank > 64) @compileError("reductions support tensor ranks from 1 through 64");
     return @as(u64, 1) << @intCast(normalizeAxis(rank, requested_axis));
 }
 
-fn normalizeAxis(comptime rank: usize, comptime requested_axis: anytype) usize {
+fn normalizeAxis(comptime rank: usize, comptime requested_axis: i8) usize {
     if (rank == 0) @compileError("cannot select an axis from a rank-zero tensor");
     const axis: isize = @intCast(requested_axis);
     const normalized = if (axis < 0) axis + @as(isize, @intCast(rank)) else axis;
@@ -674,7 +693,7 @@ fn normalizeAxis(comptime rank: usize, comptime requested_axis: anytype) usize {
     return @intCast(normalized);
 }
 
-fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: anytype) usize {
+fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: i8) usize {
     const axis: isize = @intCast(requested_axis);
     const normalized = if (axis < 0) axis + @as(isize, @intCast(rank + 1)) else axis;
     if (normalized < 0 or normalized > rank) @compileError("insertion axis is outside the output rank");
