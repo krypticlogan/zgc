@@ -2,7 +2,7 @@ const CountingBackend = @import("counting.zig").CountingBackend;
 const GraphBackend = @import("graph.zig").GraphBackend;
 const GraphAnalysis = @import("analysis.zig").GraphAnalysis;
 const SemanticOptimizationBackend = @import("semantic_optimization.zig").SemanticOptimizationBackend;
-const FusionBackend = @import("fusion.zig").FusionBackend;
+const Fusion = @import("fusion.zig").Fusion;
 const LayoutPlanningBackend = @import("layout_planning.zig").LayoutPlanningBackend;
 const KernelPlanningBackend = @import("kernel_planning.zig").KernelPlanningBackend;
 const FinalValidationBackend = @import("final_validation.zig").FinalValidationBackend;
@@ -28,7 +28,7 @@ pub fn model(
     const SemanticOptimized = SemanticOptimizationBackend().optimize(EarlyValidated, initial_analysis);
     const SemanticValidated = ValidationBackend(capacity).validate(SemanticOptimized.graph);
     const graph_analysis = GraphAnalysis().analyze(SemanticValidated);
-    const Fused = FusionBackend().form(SemanticValidated, graph_analysis);
+    const Fused = Fusion(capacity).form(SemanticValidated.graph, graph_analysis);
     const layout_graph = LayoutPlanningBackend(capacity).plan(Fused, graph_analysis);
     const LayoutValidated = ValidationBackend(capacity).validate(layout_graph);
     const executable_program = KernelPlanningBackend(capacity).plan(LayoutValidated, Fused);

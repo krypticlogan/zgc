@@ -1,21 +1,26 @@
 const Elementwise = @import("../operations/elementwise.zig");
 const Reduction = @import("../operations/reduction.zig");
+const Graph = @import("../graph.zig");
+const Semantic = @import("../operations/semantic.zig");
+const Analysis = @import("analysis.zig").Analysis;
 
-/// Select conservative logical reduction and pointwise map regions. Selected
-/// regions retain semantic tensor ids until physical kernel planning.
-pub fn FusionBackend() type {
+/// Select fusion regions for logical reductions and pointwise maps.
+/// Selected regions retain semantic tensor ids until physical kernel planning.
+pub fn Fusion(comptime capacity: Graph.Capacity) type {
     return struct {
-        pub fn form(comptime Validated: type, comptime analysis: anytype) type {
-            const source_graph = Validated.graph;
-            const selection = comptime select(source_graph, analysis);
+        const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
+        const GraphFacts = Analysis(capacity.max_tensors, capacity.max_input_refs);
+
+        pub fn form(comptime semantic_graph: SemanticGraph, comptime analysis: GraphFacts) type {
+            const selection = comptime select(semantic_graph, analysis);
             return struct {
-                pub const graph = Validated.graph;
+                pub const graph = semantic_graph;
                 pub const regions = selection;
             };
         }
 
-        fn select(comptime graph: anytype, comptime analysis: anytype) Selection(graph.node_ct) {
-            var result: Selection(graph.node_ct) = .{};
+        fn select(comptime graph: SemanticGraph, comptime analysis: GraphFacts) Selection(capacity.max_nodes) {
+            var result: Selection(capacity.max_nodes) = .{};
 
             for (0..graph.node_ct) |node_id| {
                 const descriptor = reductionForNode(graph, node_id) orelse continue;
@@ -71,7 +76,7 @@ pub fn FusionBackend() type {
                 if (result.node_region[node_id] != null or pointwiseForNode(graph, node_id) == null) continue;
                 if (hasUnassignedPointwiseConsumer(graph, analysis, result, node_id)) continue;
 
-                var group: MapGroup(graph.node_ct) = .{ .root_node = node_id };
+                var group: MapGroup(capacity.max_nodes) = .{ .root_node = node_id };
                 group.nodes[node_id] = true;
                 group.node_count = 1;
                 const root = graph.nodes[node_id].?;
@@ -96,7 +101,7 @@ pub fn FusionBackend() type {
             return result;
         }
 
-        fn pointwiseForNode(comptime graph: anytype, comptime node_id: usize) ?Elementwise.Operation {
+        fn pointwiseForNode(comptime graph: SemanticGraph, comptime node_id: usize) ?Elementwise.Operation {
             return switch (graph.nodes[node_id].?.op) {
                 .compute => |compute| Elementwise.fromCompute(compute),
                 .view => null,
@@ -104,9 +109,9 @@ pub fn FusionBackend() type {
         }
 
         fn hasUnassignedPointwiseConsumer(
-            comptime graph: anytype,
-            comptime analysis: anytype,
-            comptime selection: Selection(graph.node_ct),
+            comptime graph: SemanticGraph,
+            comptime analysis: GraphFacts,
+            comptime selection: Selection(capacity.max_nodes),
             comptime producer_id: usize,
         ) bool {
             const result_id = graph.nodes[producer_id].?.result;
@@ -122,11 +127,11 @@ pub fn FusionBackend() type {
         }
 
         fn markMapProducers(
-            comptime graph: anytype,
-            comptime analysis: anytype,
-            comptime selection: Selection(graph.node_ct),
+            comptime graph: SemanticGraph,
+            comptime analysis: GraphFacts,
+            comptime selection: Selection(capacity.max_nodes),
             comptime tensor_id: usize,
-            group: *MapGroup(graph.node_ct),
+            group: *MapGroup(capacity.max_nodes),
         ) void {
             if (analysis.use_counts[tensor_id] != 1 or analysis.is_output[tensor_id]) return;
             const producer_id = switch (graph.tensors[tensor_id].?.origin) {
@@ -150,7 +155,7 @@ pub fn FusionBackend() type {
             }
         }
 
-        fn reductionForNode(comptime graph: anytype, comptime node_id: usize) ?Reduction.Descriptor {
+        fn reductionForNode(comptime graph: SemanticGraph, comptime node_id: usize) ?Reduction.Descriptor {
             return switch (graph.nodes[node_id].?.op) {
                 .compute => |compute| Reduction.fromCompute(compute),
                 .view => null,
@@ -158,8 +163,8 @@ pub fn FusionBackend() type {
         }
 
         fn compatible(
-            comptime graph: anytype,
-            comptime group: Group(graph.node_ct),
+            comptime graph: SemanticGraph,
+            comptime group: Group(capacity.max_nodes),
             comptime descriptor: Reduction.Descriptor,
             comptime input_id: usize,
             comptime anchor: usize,
@@ -179,7 +184,7 @@ pub fn FusionBackend() type {
             return true;
         }
 
-        fn canDelayExistingOutputs(comptime graph: anytype, comptime group: Group(graph.node_ct), comptime candidate_node: usize) bool {
+        fn canDelayExistingOutputs(comptime graph: SemanticGraph, comptime group: Group(capacity.max_nodes), comptime candidate_node: usize) bool {
             for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
                 const reduction_node = maybe_node_id.?;
                 const result_id = graph.nodes[reduction_node].?.result;
@@ -193,7 +198,7 @@ pub fn FusionBackend() type {
             return true;
         }
 
-        fn fusionAnchor(comptime graph: anytype, comptime analysis: anytype, comptime tensor_id: usize) usize {
+        fn fusionAnchor(comptime graph: SemanticGraph, comptime analysis: GraphFacts, comptime tensor_id: usize) usize {
             const producer_id = switch (graph.tensors[tensor_id].?.origin) {
                 .node => |id| id,
                 .source, .literal => return tensor_id,
@@ -210,10 +215,10 @@ pub fn FusionBackend() type {
         }
 
         fn markFoldedProducers(
-            comptime graph: anytype,
-            comptime analysis: anytype,
+            comptime graph: SemanticGraph,
+            comptime analysis: GraphFacts,
             comptime tensor_id: usize,
-            folded: *[graph.node_ct]bool,
+            folded: *[capacity.max_nodes]bool,
         ) bool {
             const producer_id = switch (graph.tensors[tensor_id].?.origin) {
                 .node => |id| id,
