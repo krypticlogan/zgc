@@ -1,6 +1,7 @@
 const std = @import("std");
 const accumulation = @import("accumulation.zig");
-const Matmul = @import("../matmul.zig");
+const ContractionPlan = @import("../execution/kernel_plan.zig").ContractionPlan;
+pub const Strategy = ContractionPlan.Strategy;
 
 /// Execute one compile-time-selected traversal.
 ///
@@ -8,7 +9,7 @@ const Matmul = @import("../matmul.zig");
 /// rhs:    [K, N]
 /// output: [M, N]
 pub fn matmulWithPlan(
-    comptime strategy: Matmul.Strategy,
+    comptime strategy: Strategy,
     lhs: anytype,
     rhs: anytype,
     output: anytype,

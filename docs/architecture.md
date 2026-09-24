@@ -16,11 +16,47 @@ DefinitionBackend ──► completed definition
                             │
                             ▼
                        GraphBackend
-                 concrete graph and layouts
+                    raw semantic graph
                             │
                             ▼
                     ValidationBackend
-              checked graph and static views
+                    early validation
+                            │
+                            ▼
+                      GraphAnalysis
+                  uses and fusion edges
+                            │
+                            ▼
+             SemanticOptimizationBackend
+                 semantic graph rewrites
+                            │
+                            ▼
+                    ValidationBackend
+                 semantic revalidation
+                            │
+                            ▼
+                      GraphAnalysis
+               optimized graph use facts
+                            │
+                            ▼
+                     FusionBackend
+                logical fusion regions
+                            │
+                            ▼
+                LayoutPlanningBackend
+                  physical tensor layouts
+                            │
+                            ▼
+                    ValidationBackend
+                   layout validation
+                            │
+                            ▼
+                KernelPlanningBackend
+                 executable kernel plans
+                            │
+                            ▼
+                FinalValidationBackend
+             checked executable graph/views
                             │
                             ▼
                     LifetimeAnalysis
@@ -45,10 +81,10 @@ be an enum, giving every input, parameter, or constant a stable compile-time
 index. Its operation methods consume and return one concrete tensor-value type
 whose metadata contains an ID, dtype, and bounded shape.
 
-Internal namespaces such as `zgc.nn` and `zgc.img` build on this same front end. i.e. Neural
-network layers expand into core sources and operations, while image helpers
-declare core inputs with explicit rank-4 layout conventions. They do not own a
-separate runtime or storage representation.
+Internal namespaces such as `zgc.nn` and `zgc.img` build on this same front end.
+Neural-network layers expand into core sources and operations, while image
+helpers declare core inputs with explicit rank-4 layout conventions. They do
+not own a separate runtime or storage representation.
 
 The definition records:
 
@@ -65,7 +101,7 @@ Definition limits cover maximum rank, nodes, tensors, input
 references, and outputs. Defaults support small models; larger definitions can
 override individual fields. Exceeding a bound is a compile error.
 
-## Counting and graph lowering
+## Counting, graph construction, and optimization
 
 The counting backend reads the completed definition and derives exact graph
 capacities. In particular, the graph's rank capacity is the largest rank
@@ -73,25 +109,45 @@ actually used, rather than the definition's rank bound. Source storage uses
 direct enum indexing, so its capacity is the highest referenced source index
 plus one.
 
-The graph backend then lowers tensors in definition order. Compute results own
-dense storage. A rank-2 matmul keeps the public logical contract
-`[M, K] * [K, N]`. Parameter and constant right-hand sides are packed with
-physical strides `[1, K]`, making each logical output column contiguous.
-Matmuls whose leading dimension can fill a target SIMD vector also select a
-first-axis-contiguous lhs and result layout; that result layout propagates
-through compatible unary, elementwise, comparison, logical, selection, and
-softmax results. Other compute results use row-major storage. Transpose view
-operations preserve their source storage tensor and produce an aliasing layout
-with adjusted shape and strides.
+The graph backend records a raw semantic graph in definition order. Compute
+results initially use canonical dense storage. View operations preserve their
+source storage tensor and derive aliasing shape and strides from that semantic
+layout. Early validation checks operation shapes, dtypes, and view aliases
+before optimization relies on them.
 
-The concrete graph stores fixed arrays of nodes, tensor metadata, flattened
-input references, outputs, and sources. Node order is execution order.
+Graph analysis records tensor use counts, graph outputs, and legal
+single-consumer elementwise fusion edges. Semantic optimization owns
+value-preserving graph rewrites. Fusion selects pointwise map regions,
+producer-to-reduction regions, and compatible sibling reductions. Layout
+planning rebuilds the semantic graph with selected physical layouts and packed
+parameters. Kernel planning converts that result into an executable program
+with concrete, data-only kernel plans. A rank-2 matmul retains the logical
+contract `[M, K] * [K, N]` while eligible parameter and constant right-hand
+sides use physical strides `[1, K]`. Batch-oriented layouts propagate through
+compatible operations. Final validation checks layouts and execution plans
+before kernels are instantiated.
 
-The validation backend checks the lowered graph's inferred output shapes and
-dtypes. It also verifies that each matmul traversal plan is compatible with its
-selected layouts. A validated program provides mutable and read-only tensor
-view types whose shape, strides, base offset, element count, and layout traits
-are compile-time properties.
+Semantic compute nodes use the operation representation in `operations/`.
+Executable compute nodes retain unchanged operations as `direct` semantic
+operations. Specialized computation uses a `KernelPlan` classified as map,
+reduction, or contraction. Plans contain compile-time data only;
+`ExecutableCompute` dispatches them to their kernel family. Matmul lowers to a
+contraction plan. Map regions combine single-consumer pointwise
+expressions into one traversal. Reduction regions combine compatible
+pointwise producers and sibling accumulators over a shared domain.
+
+The semantic graph stores fixed arrays of nodes, tensor metadata, flattened
+input references, outputs, and sources. The executable program stores a fixed
+sequence of invocations with flattened input and output references. An
+invocation may name multiple outputs, allowing sibling reductions to share one
+traversal without representing secondary stores as no-op nodes.
+
+The generated model retains `raw_graph`, `semantic_graph`, and the executable
+`optimized_graph` as compile-time inspection metadata. `build_graph` refers to
+the executable program. A final validated program provides mutable and
+read-only tensor view types
+whose shape, strides, base offset, element count, and layout traits are
+compile-time properties.
 
 ## Memory planning and model generation
 
@@ -133,7 +189,8 @@ View nodes do not execute kernels. Their result layouts are resolved during
 graph construction, and downstream compute kernels receive static-geometry
 views into the aliased storage.
 
-`definition.modelWith(...)` selects non-default storage by source-enum tag.
+`definition.modelWith(...)` accepts a typed slice of source-enum tags and
+storage bindings to select non-default storage.
 `zgc.Source.embed(bytes)` accepts logical row-major parameter or constant bytes
 and compile-time packs them into the lowered source layout.
 `zgc.Source.embedPacked(bytes)` accepts bytes already in that physical layout.
@@ -145,20 +202,31 @@ counts are checked before a source is accepted.
 ## Kernel dispatch
 
 Each compute node resolves prevalidated static input and output view types and
-dispatches through `Op.Compute.execute`. Graph lowering selects physical
+dispatches through its executable operation. Optimization selects physical
 layouts, while kernels traverse contiguous axes in target-native SIMD chunks
 with scalar tails. Runtime view state contains storage and any cursor offset
 introduced by runtime-selected subviews; fixed tensor geometry is carried by
 the type.
 
-Matmul lowering also records a concrete traversal strategy in the operation's
-compile-time plan. Generated models dispatch directly to that strategy and do
-not branch over layout metadata at runtime. Direct low-level operation calls
-must provide a concrete strategy. The plan contains the traversal strategy and
-is the configuration boundary for strategy-specific kernels.
+Matmul kernel planning records a concrete traversal strategy in a data-only
+contraction plan. Generated models dispatch directly to that strategy and do not
+branch over layout metadata at runtime. Direct semantic matmul execution uses
+the general scalar kernel.
 
-Shape, dtype, rank, axis, and lowered-plan compatibility checks belong to the
-definition and validation backends. Execution kernels assume those contracts.
+Map execution uses a compile-time instruction program built from
+backend-independent elementwise descriptors. Instruction arity and accepted
+dtypes belong to semantic operations; instruction references and traversal are
+executable-graph details. The instruction sequence is unrolled at compile time,
+so a fused kernel performs one output traversal without runtime opcode dispatch
+or storage for instruction results.
+
+Logical fusion regions and physical kernel plans are separate. Regions contain
+expressions, reduction axes, accumulators, and stores; plans add traversal and
+vectorization schedules after layout selection. Neither representation owns
+execution behavior.
+
+Shape, dtype, rank, axis, and plan compatibility checks belong to semantic and
+final validation. Execution kernels assume those contracts.
 Dynamic `Tensor.View` and `Tensor.ConstView` types remain available when a
 low-level caller intentionally supplies runtime geometry.
 
@@ -167,8 +235,8 @@ Kernels are grouped by family:
 | Family | Implemented operations |
 | --- | --- |
 | Literals | Rank-zero scalar values and zero-stride filled-tensor expansion |
-| Elementwise | ReLU, exp, neg, abs, sqrt, log, reciprocal, arithmetic, minimum, maximum, and clamp |
-| Predicate | Comparisons, strict boolean logic, and conditional selection |
+| Elementwise | Numeric operations, comparisons, strict boolean logic, and conditional selection |
+| Fused elementwise | Compile-time typed instruction programs with contiguous SIMD and static-stride fallback traversal |
 | Materialization | Logical copy, row-major conversion, and constant padding |
 | Shifting | Shape-preserving translation with wrap, edge, reflect, or constant boundaries |
 | Contraction | Rank-2 matmul |
@@ -194,7 +262,7 @@ its storage remains one element regardless of logical shape.
 
 Structural operations create aliases and do not execute kernels. Squeeze and
 unsqueeze preserve arbitrary source strides. Flatten requires its selected
-axis range to be logically contiguous. General reshape currently requires a
+axis range to be logically contiguous. General reshape requires a
 logically row-major contiguous source because it must preserve element order
 without copying. Permutation lowers to transpose aliases. Slicing uses
 compile-time positive bounds and steps to produce an offset strided alias.

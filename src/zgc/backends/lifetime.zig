@@ -15,8 +15,8 @@ pub fn Analysis(comptime tensor_count: usize) type {
     };
 }
 
-/// Computes storage lifetimes for a validated, sequential graph. Aliasing
-/// tensors receive the consolidated lifetime of their storage root.
+/// Computes storage lifetimes for a validated, sequential executable program.
+/// Aliasing tensors receive the consolidated lifetime of their storage root.
 pub fn LifetimeAnalysis() type {
     return struct {
         pub fn analyze(
@@ -26,6 +26,9 @@ pub fn LifetimeAnalysis() type {
             var storage_lifetimes: [graph.tensor_ct]?Lifetime = @splat(null);
 
             for (0..graph.tensor_ct) |tensor_id| {
+                if (comptime @hasField(@TypeOf(graph), "materialized")) {
+                    if (!graph.materialized[tensor_id]) continue;
+                }
                 const info = graph.tensors[tensor_id].?;
                 if (info.storage_tensor != tensor_id) continue;
 
@@ -67,6 +70,15 @@ pub fn LifetimeAnalysis() type {
 
             var result: Analysis(graph.tensor_ct) = undefined;
             for (0..graph.tensor_ct) |tensor_id| {
+                if (comptime @hasField(@TypeOf(graph), "materialized")) {
+                    if (!graph.materialized[tensor_id]) {
+                        result.tensor_lifetimes[tensor_id] = .{
+                            .begin_node = 0,
+                            .end_node_exclusive = 0,
+                        };
+                        continue;
+                    }
+                }
                 const storage_tensor = graph.tensors[tensor_id].?.storage_tensor;
                 result.tensor_lifetimes[tensor_id] = storage_lifetimes[storage_tensor].?;
             }

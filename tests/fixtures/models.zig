@@ -28,12 +28,12 @@ const parameter_definition = definition: {
     builder.output(builder.add(input, parameter));
     break :definition builder.finish();
 };
-pub const EmbeddedParameterModel = parameter_definition.modelWith(.{
-    .parameter = zgc.Source.embed(embedded_parameters.weights[0]),
+pub const EmbeddedParameterModel = parameter_definition.modelWith(&.{
+    .{ .source = .parameter, .binding = zgc.Source.embed(embedded_parameters.weights[0]) },
 });
-pub const BoundInputModel = parameter_definition.modelWith(.{
-    .input = zgc.Source.bound,
-    .parameter = zgc.Source.embed(embedded_parameters.weights[0]),
+pub const BoundInputModel = parameter_definition.modelWith(&.{
+    .{ .source = .input, .binding = zgc.Source.bound },
+    .{ .source = .parameter, .binding = zgc.Source.embed(embedded_parameters.weights[0]) },
 });
 
 pub const MatmulSources = enum(usize) { input, weights };
@@ -49,21 +49,23 @@ const matmul_definition = definition: {
 pub const MatmulModel = matmul_definition.model();
 const logical_weights = [_]f32{ 1, 2, 3, 4, 5, 6 };
 const packed_weights = [_]f32{ 1, 3, 5, 2, 4, 6 };
-pub const EmbeddedMatmulModel = matmul_definition.modelWith(.{
-    .weights = zgc.Source.embed(std.mem.asBytes(&logical_weights)),
+pub const EmbeddedMatmulModel = matmul_definition.modelWith(&.{
+    .{ .source = .weights, .binding = zgc.Source.embed(std.mem.asBytes(&logical_weights)) },
 });
-pub const PackedMatmulModel = matmul_definition.modelWith(.{
-    .weights = zgc.Source.embedPacked(std.mem.asBytes(&packed_weights)),
+pub const PackedMatmulModel = matmul_definition.modelWith(&.{
+    .{ .source = .weights, .binding = zgc.Source.embedPacked(std.mem.asBytes(&packed_weights)) },
 });
 
 const ReuseDefinition = zgc.DefinitionBackend(BasicSources, .{ .max_rank = 1, .max_nodes = 3, .max_tensors = 4, .max_input_refs = 3, .max_outputs = 1 });
 const reuse_definition = definition: {
     var builder = ReuseDefinition.init();
     const input = builder.input(.input, .f32, &.{4});
-    const first = builder.relu(input);
-    const second = builder.relu(first);
-    builder.output(builder.relu(second));
+    const first = builder.copy(input);
+    const second = builder.copy(first);
+    builder.output(builder.copy(second));
     break :definition builder.finish();
 };
 pub const ReuseModel = reuse_definition.model();
-pub const BoundReuseModel = reuse_definition.modelWith(.{ .input = zgc.Source.bound });
+pub const BoundReuseModel = reuse_definition.modelWith(&.{
+    .{ .source = .input, .binding = zgc.Source.bound },
+});

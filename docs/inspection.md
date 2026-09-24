@@ -17,8 +17,11 @@ defer stdout_writer.interface.flush() catch {};
 try zgc.Inspect.writeModel(MyModel, &stdout_writer.interface, .{});
 ```
 
-`writeModel` can include or omit capacity, graph, tree, and memory-plan
-sections through `zgc.Inspect.Sections`. The individual renderers are also
+`writeModel` can include or omit capacity, raw graph, optimized graph, tree,
+and memory-plan sections through `zgc.Inspect.Sections`. `MyModel.raw_graph`
+contains semantic operations before optimization; `MyModel.optimized_graph`
+and its `build_graph` alias contain executable operations and kernel plans. The
+individual renderers are also
 public:
 
 - `writeCapacity`
@@ -34,8 +37,9 @@ the model.
 ## Model-specific CLI
 
 ZGC exports a `zgc_inspect_cli` module. A consumer supplies a module named
-`model` containing `pub const Model`, producing an inspector specialized for
-that generated model:
+`model`. If that module exports one generated model type, the inspector infers
+its declaration name. If it exports several generated models, select one with
+`--model <declaration>`:
 
 ```zig
 const zgc_dep = b.dependency("zgc", .{
@@ -64,12 +68,16 @@ The executable supports these commands:
 
 ```text
 zgc-inspect all
+zgc-inspect --model 'model-name' graph
 zgc-inspect summary
+zgc-inspect raw-graph
 zgc-inspect graph
+zgc-inspect graphs
 zgc-inspect tree
 zgc-inspect memory-plan
 zgc-inspect help
 ```
 
 `all` is the default. Each executable is compile-time specialized for the model
-module supplied by its build.
+types exported by its supplied module. Declaration discovery checks generated
+model metadata and does not require a declaration named `Model`.

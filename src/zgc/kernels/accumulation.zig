@@ -1,5 +1,6 @@
 const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
+const Reduction = @import("../operations/reduction.zig");
 
 pub fn AccumulatorScalar(comptime dtype: Dtype) type {
     return switch (dtype) { // dtypes with smaller bit withs accumulate into larger windows
@@ -61,5 +62,51 @@ pub fn narrowScalar(
         .float => @floatCast(value),
         .signed_integer => @intCast(value),
         .boolean => @compileError("boolean tensors cannot be accumulated"),
+    };
+}
+
+pub fn identity(comptime dtype: Dtype, comptime kind: Reduction.Combine) AccumulatorScalar(dtype) {
+    return switch (kind) {
+        .sum => 0,
+        .minimum => switch (comptime dtype.kind()) {
+            .float => std.math.inf(AccumulatorScalar(dtype)),
+            .signed_integer => std.math.maxInt(AccumulatorScalar(dtype)),
+            .boolean => @compileError("boolean minimum reduction is unsupported"),
+        },
+        .maximum => switch (comptime dtype.kind()) {
+            .float => -std.math.inf(AccumulatorScalar(dtype)),
+            .signed_integer => std.math.minInt(AccumulatorScalar(dtype)),
+            .boolean => @compileError("boolean maximum reduction is unsupported"),
+        },
+    };
+}
+
+pub fn combine(
+    comptime dtype: Dtype,
+    comptime kind: Reduction.Combine,
+    accumulator: AccumulatorScalar(dtype),
+    value: dtype.Scalar(),
+) AccumulatorScalar(dtype) {
+    const widened = widenScalar(dtype, value);
+    return switch (kind) {
+        .sum => accumulator + widened,
+        .minimum => @min(accumulator, widened),
+        .maximum => @max(accumulator, widened),
+    };
+}
+
+pub fn finish(
+    comptime dtype: Dtype,
+    comptime finalizer: Reduction.Finalize,
+    accumulator: AccumulatorScalar(dtype),
+    reduction_count: usize,
+) dtype.Scalar() {
+    return switch (finalizer) {
+        .identity => narrowScalar(dtype, accumulator),
+        .mean => blk: {
+            if (comptime dtype.kind() != .float) @compileError("mean requires a floating-point dtype");
+            const divisor: AccumulatorScalar(dtype) = @floatFromInt(reduction_count);
+            break :blk narrowScalar(dtype, accumulator / divisor);
+        },
     };
 }

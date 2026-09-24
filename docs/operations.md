@@ -7,6 +7,25 @@ View operations alias an existing storage root and execute no runtime kernel.
 Tensor dimensions must be positive. Operations preserve their input dtype
 unless stated otherwise. Supported dtypes are `f32`, `f16`, `i8`, and `bool`.
 
+## Definition API types
+
+The model-definition surface uses concrete parameter types so editor tooling
+can expose accepted fields and scalar types:
+
+| Methods | Parameter contract |
+| --- | --- |
+| `scalar`, `full` | `value` has the scalar type selected by the compile-time `dtype` argument |
+| `sum`, `mean`, `min`, `max` | `ReductionOptions` with `axes: ?[]const i8` and `keep_dims: bool` |
+| `flatten` | `FlattenOptions` |
+| `slice` | `SliceOptions` |
+| `pad` | `PadOptions` |
+| `windows` | `WindowOptions` |
+| `modelWith` | `[]const SourceOverride`, whose entries contain a source-enum value and `Source.Binding` |
+
+Options may use inferred struct literals because the method signature supplies
+their concrete type. For example, a single-axis reduction is
+`builder.sum(tensor, .{ .axes = &.{1} })`; omitting `axes` reduces every axis.
+
 ## Scalars and filled tensors
 
 `scalar(dtype, value)` creates an immutable, source-free rank-zero tensor whose
@@ -100,7 +119,8 @@ layout.
 
 ## Reductions
 
-`sum`, `mean`, `min`, and `max` accept one or more axes. `null` selects every
+`sum`, `mean`, `min`, and `max` accept `ReductionOptions`. The `axes` field is
+a slice containing one or more axes; its default value of `null` selects every
 axis. Negative axes are normalized relative to the input rank; duplicate,
 empty, and out-of-range axis sets are rejected. Reduced axes are removed by
 default or retained with extent one when `keep_dims` is true.

@@ -74,6 +74,9 @@ fn hasLogicalRowMajorLayout(comptime info: anytype) bool {
 pub fn Model(
     comptime SourceKey: type,
     comptime capacities: Graph.Capacity,
+    comptime EarlyValidated: type,
+    comptime SemanticValidated: type,
+    comptime graph_analysis: anytype,
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
@@ -87,6 +90,10 @@ pub fn Model(
         pub const build_graph = graph;
         pub const memory_plan = plan;
         pub const internal_capacity = capacities;
+        pub const raw_graph = EarlyValidated.graph;
+        pub const semantic_graph = SemanticValidated.graph;
+        pub const optimized_graph = graph;
+        pub const graph_analysis_result = graph_analysis;
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
 
@@ -187,7 +194,7 @@ pub fn Model(
             return sourceInfo(source_key).layout;
         }
 
-        fn executeNode(model: *Self, comptime node_id: Graph.Node.Id) void {
+        fn executeNode(model: *Self, comptime node_id: usize) void {
             const node = graph.nodes[node_id].?;
             const compute = switch (node.op) {
                 .compute => |op| op,
@@ -208,8 +215,21 @@ pub fn Model(
                 inputs[input_index] = model.constTensorView(tensor_id);
             }
 
-            const output = model.tensorView(node.result);
-            compute.execute(inputs, output);
+            const OutputViews = comptime blk: {
+                var output_types: [node.output_count]type = undefined;
+                for (0..node.output_count) |output_index| {
+                    const tensor_id = graph.output_refs[node.output_start + output_index].?;
+                    output_types[output_index] = Validated.View(tensor_id);
+                }
+                break :blk std.meta.Tuple(&output_types);
+            };
+            var outputs: OutputViews = undefined;
+            inline for (0..node.output_count) |output_index| {
+                const tensor_id = comptime graph.output_refs[node.output_start + output_index].?;
+                outputs[output_index] = model.tensorView(tensor_id);
+            }
+
+            compute.execute(inputs, outputs);
         }
 
         fn tensorView(model: *Self, comptime tensor_id: Tensor.Id) blk: {

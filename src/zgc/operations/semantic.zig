@@ -1,8 +1,9 @@
 const std = @import("std");
-const Tensor = @import("tensor.zig");
-const Matmul = @import("matmul.zig");
-const kernels = @import("kernels.zig");
-const validation = @import("validation.zig");
+const Dtype = @import("../dtype.zig").Dtype;
+const Elementwise = @import("elementwise.zig");
+const Tensor = @import("../tensor.zig");
+const kernels = @import("../kernels/root.zig");
+const validation = @import("../validation.zig");
 
 /// Tensor operation classified by whether it computes new storage or creates
 /// another view of existing storage.
@@ -41,7 +42,7 @@ pub const Op = union(enum) {
         contiguous,
         pad: PadAttrs,
         shift: ShiftAttrs,
-        matmul: MatmulAttrs,
+        matmul,
         sum: ReductionAttrs,
         mean: ReductionAttrs,
         min: ReductionAttrs,
@@ -65,51 +66,12 @@ pub const Op = union(enum) {
 
             pub const Boundary = enum { wrap, edge, reflect, constant };
         };
-        pub const MatmulAttrs = Matmul.Plan;
-
         pub fn execute(
             comptime op: Compute,
             inputs: anytype,
             output: anytype,
         ) void {
             kernels.execute(op, inputs, output);
-        }
-
-        pub fn inferRank(op: Compute, inputs: anytype) usize {
-            return switch (op) {
-                .relu => inferNumericUnaryRank("relu", inputs),
-                .exp, .neg, .abs, .sqrt, .log, .reciprocal => inferFloatUnaryRank(@tagName(op), inputs),
-                .add, .sub, .mul, .minimum, .maximum => inferNumericBinaryRank(@tagName(op), inputs),
-                .div => blk: {
-                    const rank = inferNumericBinaryRank("div", inputs);
-                    validation.requireDtypeKind("div", inputs[0], .float);
-                    break :blk rank;
-                },
-                .clamp => inferNumericTernaryRank("clamp", inputs),
-                .equal, .not_equal => inferBinaryElementwiseRank(@tagName(op), inputs),
-                .less_than, .less_equal, .greater_than, .greater_equal => inferNumericBinaryRank(@tagName(op), inputs),
-                .logical_not => inferBooleanUnaryRank("logical_not", inputs),
-                .logical_and, .logical_or => inferBooleanBinaryRank(@tagName(op), inputs),
-                .where => inferWhereRank(inputs),
-                .copy, .contiguous => inferUnaryRank(@tagName(op), inputs),
-                .pad => |attrs| inferPadRank(inputs, attrs),
-                .shift => |attrs| inferShiftRank(inputs, attrs),
-                .matmul => inferMatmulRank(inputs),
-                .sum => |attrs| inferNumericReductionRank("sum", inputs, attrs),
-                .mean => |attrs| blk: {
-                    const rank = inferReductionRank("mean", inputs, attrs);
-                    validation.requireDtypeKind("mean", inputs[0], .float);
-                    break :blk rank;
-                },
-                .min => |attrs| inferNumericReductionRank("min", inputs, attrs),
-                .max => |attrs| inferNumericReductionRank("max", inputs, attrs),
-                .concat => |attrs| inferConcatRank(inputs, attrs.axis),
-                .softmax => |attrs| blk: {
-                    const rank = inferFloatUnaryRank("softmax", inputs);
-                    validation.requireAxis("softmax", inputs[0], attrs.axis);
-                    break :blk rank;
-                },
-            };
         }
 
         pub fn inferShape(
@@ -165,21 +127,13 @@ pub const Op = union(enum) {
             };
         }
 
-        pub fn inferDtype(op: Compute, inputs: anytype) @import("dtype.zig").Dtype {
-            return switch (op) {
-                .equal,
-                .not_equal,
-                .less_than,
-                .less_equal,
-                .greater_than,
-                .greater_equal,
-                .logical_not,
-                .logical_and,
-                .logical_or,
-                => .bool,
-                .where => inputs[1].dtype,
-                else => inputs[0].dtype,
-            };
+        pub fn inferDtype(comptime op: Compute, comptime inputs: anytype) Dtype {
+            if (comptime Elementwise.fromCompute(op)) |pointwise| {
+                var dtypes: [inputs.len]Dtype = undefined;
+                inline for (inputs, 0..) |input, index| dtypes[index] = input.dtype;
+                return pointwise.inferDtype(&dtypes);
+            }
+            return inputs[0].dtype;
         }
     };
 

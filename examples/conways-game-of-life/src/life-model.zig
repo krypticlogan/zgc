@@ -45,7 +45,9 @@ pub const Model = model: {
 
     // The application owns the evolving world,
     // so the source is bound for each step instead of becoming persistent model storage.
-    break :model builder.finish().modelWith(.{ .world = zgc.Source.bound });
+    break :model builder.finish().modelWith(&.{
+        .{ .source = .world, .binding = zgc.Source.bound },
+    });
 };
 
 pub fn step(model: *Model, world: *[cell_count]bool) void {

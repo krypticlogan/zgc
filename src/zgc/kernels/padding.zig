@@ -1,4 +1,4 @@
-const Op = @import("../op.zig").Op;
+const Op = @import("../operations/semantic.zig").Op;
 
 /// Materialize constant padding. Shape, dtype, widths, and output layout are
 /// fixed and validated before this kernel is instantiated.

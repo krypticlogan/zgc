@@ -32,6 +32,40 @@ test "inspection CLI reports invalid commands" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "usage: zgc-inspect") != null);
 }
 
+test "inspection CLI infers a uniquely exported model declaration" {
+    const SingleModelModule = struct {
+        pub const FluidStep = Model;
+    };
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try std.testing.expect(try zgc.Inspect.runModuleCli(SingleModelModule, &.{"summary"}, &writer));
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "== Capacity ==") != null);
+}
+
+test "inspection CLI selects a model declaration from a module" {
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try std.testing.expect(try zgc.Inspect.runModuleCli(
+        models,
+        &.{ "--model", "FullModel", "summary" },
+        &writer,
+    ));
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "Capacity(nodes=1") != null);
+}
+
+test "inspection CLI requires selection when a module exports multiple models" {
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try std.testing.expect(!try zgc.Inspect.runModuleCli(models, &.{"summary"}, &writer));
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "select one with --model") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "BasicModel") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "FullModel") != null);
+}
+
 test "inspection renders bounded model memory" {
     var model = Model.init();
     var buffer: [512]u8 = undefined;

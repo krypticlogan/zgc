@@ -72,14 +72,14 @@ pub const definition = blk: {
 
 // Inputs remain caller-owned and replaceable, while immutable parameters are
 // embedded into the executable and available for compile-time source packing.
-pub const Model = definition.modelWith(.{
-    .input = zgc.Source.bound,
-    .w1 = zgc.Source.embed(params.w1),
-    .b1 = zgc.Source.embed(params.b1),
-    .w2 = zgc.Source.embed(params.w2),
-    .b2 = zgc.Source.embed(params.b2),
-    .w3 = zgc.Source.embed(params.w3),
-    .b3 = zgc.Source.embed(params.b3),
+pub const Model = definition.modelWith(&.{
+    .{ .source = .input, .binding = zgc.Source.bound },
+    .{ .source = .w1, .binding = zgc.Source.embed(params.w1) },
+    .{ .source = .b1, .binding = zgc.Source.embed(params.b1) },
+    .{ .source = .w2, .binding = zgc.Source.embed(params.w2) },
+    .{ .source = .b2, .binding = zgc.Source.embed(params.b2) },
+    .{ .source = .w3, .binding = zgc.Source.embed(params.w3) },
+    .{ .source = .b3, .binding = zgc.Source.embed(params.b3) },
 });
 
 pub fn bindInput(model: *Model, input: *const [input_size]f32) void {

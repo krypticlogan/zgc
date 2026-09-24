@@ -1,4 +1,4 @@
-const Op = @import("../op.zig").Op;
+const Op = @import("../operations/semantic.zig").Op;
 
 /// Materialize a translated tensor. Geometry and boundary choice are
 /// validated before this kernel is instantiated.

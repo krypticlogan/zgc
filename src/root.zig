@@ -2,7 +2,7 @@
 pub const GraphCapacity = @import("zgc/graph.zig").Capacity;
 pub const Dtype = @import("zgc/dtype.zig").Dtype;
 pub const ScalarValue = @import("zgc/dtype.zig").ScalarValue;
-pub const Op = @import("zgc/op.zig").Op;
+pub const Op = @import("zgc/operations/semantic.zig").Op;
 pub const Tensor = @import("zgc/tensor.zig");
 pub const Validation = @import("zgc/validation.zig");
 pub const DefinitionBackend = @import("zgc/backends/definition.zig").DefinitionBackend;
@@ -13,7 +13,6 @@ pub const SliceOptions = @import("zgc/backends/definition.zig").SliceOptions;
 pub const PadOptions = @import("zgc/backends/definition.zig").PadOptions;
 pub const WindowOptions = @import("zgc/backends/definition.zig").WindowOptions;
 pub const Model = @import("zgc/model.zig").Model;
-pub const Matmul = @import("zgc/matmul.zig");
 pub const Source = @import("zgc/source.zig");
 pub const Storage = @import("zgc/storage.zig");
 pub const Inspect = @import("zgc/inspect.zig");

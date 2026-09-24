@@ -26,7 +26,9 @@ test "persistent outputs retain distinct regions" {
         builder.output(builder.relu(input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(.{ .input = zgc.Source.bound });
+    const Model = definition.modelWith(&.{
+        .{ .source = .input, .binding = zgc.Source.bound },
+    });
     const regions = Model.memory_plan.tensor_regions;
 
     try std.testing.expect(regions[1].?.offset != regions[2].?.offset);
@@ -45,13 +47,15 @@ test "memory plan splits and coalesces free spans" {
     const definition = comptime blk: {
         var builder = Definition.init();
         const input = builder.input(.input, .f32, &.{8});
-        const wide_temporary = builder.relu(input);
-        const scalar_temporary = builder.sum(wide_temporary, 0);
+        const wide_temporary = builder.copy(input);
+        const scalar_temporary = builder.sum(wide_temporary, .{ .axes = &.{0} });
         builder.output(builder.relu(scalar_temporary));
         builder.output(builder.relu(input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(.{ .input = zgc.Source.bound });
+    const Model = definition.modelWith(&.{
+        .{ .source = .input, .binding = zgc.Source.bound },
+    });
     const regions = Model.memory_plan.tensor_regions;
 
     try std.testing.expectEqual(@as(usize, 0), regions[1].?.offset);
@@ -74,15 +78,15 @@ test "memory plan grows when no free span fits" {
         var builder = Definition.init();
         const small_input = builder.input(.small_input, .f32, &.{8});
         const large_input = builder.input(.large_input, .f32, &.{10});
-        const wide_temporary = builder.relu(small_input);
-        const scalar_temporary = builder.sum(wide_temporary, 0);
+        const wide_temporary = builder.copy(small_input);
+        const scalar_temporary = builder.sum(wide_temporary, .{ .axes = &.{0} });
         builder.output(builder.relu(scalar_temporary));
         builder.output(builder.relu(large_input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(.{
-        .small_input = zgc.Source.bound,
-        .large_input = zgc.Source.bound,
+    const Model = definition.modelWith(&.{
+        .{ .source = .small_input, .binding = zgc.Source.bound },
+        .{ .source = .large_input, .binding = zgc.Source.bound },
     });
     const regions = Model.memory_plan.tensor_regions;
 

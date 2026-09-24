@@ -1,24 +1,25 @@
 const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
+const Operation = @import("../operations/elementwise.zig").Operation;
+const operation = @import("elementwise_operation.zig");
 
 /// Apply an element-wise operator through a contiguous SIMD fast path or a generic strided
 /// traversal when any participating view is non-contiguous.
-fn unary(input: anytype, output: anytype, comptime Operator: type) void {
+fn unary(input: anytype, output: anytype, comptime op: Operation) void {
     const Input = @TypeOf(input);
     const Output = @TypeOf(output);
-    const dtype = Input.dtype;
     if (comptime hasStaticGeometry(Input) and hasStaticGeometry(Output)) {
         if (comptime std.mem.eql(isize, &Input.static_strides, &Output.static_strides) and
             Input.static_is_dense_positive and Output.static_is_dense_positive)
         {
-            applyUnaryDense(input.denseSlice().?, output.denseSlice().?, dtype, Operator);
+            applyUnaryDense(input.denseSlice().?, output.denseSlice().?, op);
             return;
         }
     } else {
         if (std.mem.eql(isize, &input.strides, &output.strides)) {
             if (input.denseSlice()) |input_storage| {
                 if (output.denseSlice()) |output_storage| {
-                    applyUnaryDense(input_storage, output_storage, dtype, Operator);
+                    applyUnaryDense(input_storage, output_storage, op);
                     return;
                 }
             }
@@ -28,9 +29,11 @@ fn unary(input: anytype, output: anytype, comptime Operator: type) void {
     for (0..input.len()) |linear_index| {
         const input_index = input.elementOffsetFromLinear(linear_index);
         const output_index = output.elementOffsetFromLinear(linear_index);
-        output.storage[output_index] = Operator.scalar(
-            dtype,
-            input.storage[input_index],
+        const value = input.storage[input_index];
+        output.storage[output_index] = operation.evaluateScalar(
+            Output.dtype,
+            op,
+            .{value},
         );
     }
 }
@@ -38,25 +41,28 @@ fn unary(input: anytype, output: anytype, comptime Operator: type) void {
 fn applyUnaryDense(
     input_storage: anytype,
     output_storage: anytype,
-    comptime dtype: Dtype,
-    comptime Operator: type,
+    comptime op: Operation,
 ) void {
-    const vector_len = std.simd.suggestVectorLength(dtype.Scalar()) orelse 1;
-    const Vector = dtype.Vector(vector_len);
+    const InputScalar = @typeInfo(@TypeOf(input_storage)).pointer.child;
+    const OutputScalar = @typeInfo(@TypeOf(output_storage)).pointer.child;
+    const input_dtype = comptime Dtype.fromScalar(InputScalar);
+    const output_dtype = comptime Dtype.fromScalar(OutputScalar);
+    const vector_len = comptime vectorLength(InputScalar);
 
     var index: usize = 0;
     while (index + vector_len <= input_storage.len) : (index += vector_len) {
-        const values: Vector = input_storage[index..][0..vector_len].*;
-        output_storage[index..][0..vector_len].* = Operator.vector(dtype, vector_len, values);
+        const values: input_dtype.Vector(vector_len) = input_storage[index..][0..vector_len].*;
+        output_storage[index..][0..vector_len].* = operation.evaluate(output_dtype, vector_len, op, .{values});
     }
     while (index < input_storage.len) : (index += 1) {
-        output_storage[index] = Operator.scalar(dtype, input_storage[index]);
+        const value = input_storage[index];
+        output_storage[index] = operation.evaluateScalar(output_dtype, op, .{value});
     }
 }
 
 /// Apply a element-wise binary operator through a contiguous SIMD fast path or a generic
 /// strided traversal.
-fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void {
+fn binary(a: anytype, b: anytype, output: anytype, comptime op: Operation) void {
     const Output = @TypeOf(output);
 
     const output_shape = if (comptime hasStaticGeometry(Output))
@@ -68,7 +74,6 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
     const AView = @TypeOf(a_view);
     const BView = @TypeOf(b_view);
 
-    const dtype = Output.dtype;
     if (comptime hasStaticGeometry(AView) and
         hasStaticGeometry(BView) and
         hasStaticGeometry(Output))
@@ -83,8 +88,7 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
                 a_view.denseSlice().?,
                 b_view.denseSlice().?,
                 output.denseSlice().?,
-                dtype,
-                Operator,
+                op,
             );
             return;
         }
@@ -95,7 +99,7 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
             if (a_view.denseSlice()) |a_storage| {
                 if (b_view.denseSlice()) |b_storage| {
                     if (output.denseSlice()) |output_storage| {
-                        applyBinaryDense(a_storage, b_storage, output_storage, dtype, Operator);
+                        applyBinaryDense(a_storage, b_storage, output_storage, op);
                         return;
                     }
                 }
@@ -105,11 +109,11 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
 
     if (comptime Output.rank == 2) {
         if (hasSameLayout(a_view, output) and isTrailingVectorBroadcast(b_view) and output.denseSlice() != null) {
-            applyFirstAxisBroadcast(a_view, b_view, output, dtype, Operator, true);
+            applyFirstAxisBroadcast(a_view, b_view, output, op, true);
             return;
         }
         if (isTrailingVectorBroadcast(a_view) and hasSameLayout(b_view, output) and output.denseSlice() != null) {
-            applyFirstAxisBroadcast(b_view, a_view, output, dtype, Operator, false);
+            applyFirstAxisBroadcast(b_view, a_view, output, op, false);
             return;
         }
     }
@@ -117,18 +121,7 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
     if (a_view.contiguousSlice()) |a_storage| {
         if (b_view.contiguousSlice()) |b_storage| {
             if (output.contiguousSlice()) |output_storage| {
-                const vector_len = std.simd.suggestVectorLength(Output.scalar_type) orelse 1;
-                const Vector = dtype.Vector(vector_len);
-
-                var index: usize = 0;
-                while (index + vector_len <= a_storage.len) : (index += vector_len) {
-                    const a_values: Vector = a_storage[index..][0..vector_len].*;
-                    const b_values: Vector = b_storage[index..][0..vector_len].*;
-                    output_storage[index..][0..vector_len].* = Operator.vector(dtype, vector_len, a_values, b_values);
-                }
-                while (index < a_storage.len) : (index += 1) {
-                    output_storage[index] = Operator.scalar(dtype, a_storage[index], b_storage[index]);
-                }
+                applyBinaryDense(a_storage, b_storage, output_storage, op);
                 return;
             }
         }
@@ -138,10 +131,10 @@ fn binary(a: anytype, b: anytype, output: anytype, comptime Operator: type) void
         const a_index = a_view.elementOffsetFromLinear(linear_index);
         const b_index = b_view.elementOffsetFromLinear(linear_index);
         const output_index = output.elementOffsetFromLinear(linear_index);
-        output.storage[output_index] = Operator.scalar(
-            dtype,
-            a_view.storage[a_index],
-            b_view.storage[b_index],
+        output.storage[output_index] = operation.evaluateScalar(
+            Output.dtype,
+            op,
+            .{ a_view.storage[a_index], b_view.storage[b_index] },
         );
     }
 }
@@ -176,26 +169,28 @@ fn applyFirstAxisBroadcast(
     dense: anytype,
     broadcast: anytype,
     output: anytype,
-    comptime dtype: Dtype,
-    comptime Operator: type,
+    comptime op: Operation,
     comptime dense_is_a: bool,
 ) void {
-    const vector_len = std.simd.suggestVectorLength(dtype.Scalar()) orelse 1;
-    const Vector = dtype.Vector(vector_len);
+    const DenseScalar = @TypeOf(dense).scalar_type;
+    const Output = @TypeOf(output);
+    const dense_dtype = @TypeOf(dense).dtype;
+    const broadcast_dtype = @TypeOf(broadcast).dtype;
+    const vector_len = comptime vectorLength(DenseScalar);
     const batch = output.shape[0];
     const width = output.shape[1];
 
     for (0..width) |column| {
-        const broadcast_vector: Vector = @splat(broadcast.get(.{ 0, column }));
+        const broadcast_vector: broadcast_dtype.Vector(vector_len) = @splat(broadcast.get(.{ 0, column }));
         var row: usize = 0;
         while (row + vector_len <= batch) : (row += vector_len) {
             const dense_offset = dense.elementOffset(.{ row, column });
             const output_offset = output.elementOffset(.{ row, column });
-            const dense_values: Vector = dense.storage[dense_offset..][0..vector_len].*;
+            const dense_values: dense_dtype.Vector(vector_len) = dense.storage[dense_offset..][0..vector_len].*;
             output.storage[output_offset..][0..vector_len].* = if (dense_is_a)
-                Operator.vector(dtype, vector_len, dense_values, broadcast_vector)
+                operation.evaluate(Output.dtype, vector_len, op, .{ dense_values, broadcast_vector })
             else
-                Operator.vector(dtype, vector_len, broadcast_vector, dense_values);
+                operation.evaluate(Output.dtype, vector_len, op, .{ broadcast_vector, dense_values });
         }
         while (row < batch) : (row += 1) {
             const dense_value = dense.get(.{ row, column });
@@ -203,9 +198,9 @@ fn applyFirstAxisBroadcast(
             output.set(
                 .{ row, column },
                 if (dense_is_a)
-                    Operator.scalar(dtype, dense_value, broadcast_value)
+                    operation.evaluateScalar(Output.dtype, op, .{ dense_value, broadcast_value })
                 else
-                    Operator.scalar(dtype, broadcast_value, dense_value),
+                    operation.evaluateScalar(Output.dtype, op, .{ broadcast_value, dense_value }),
             );
         }
     }
@@ -215,223 +210,141 @@ fn applyBinaryDense(
     a_storage: anytype,
     b_storage: anytype,
     output_storage: anytype,
-    comptime dtype: Dtype,
-    comptime Operator: type,
+    comptime op: Operation,
 ) void {
-    const vector_len = std.simd.suggestVectorLength(dtype.Scalar()) orelse 1;
-    const Vector = dtype.Vector(vector_len);
+    const AScalar = @typeInfo(@TypeOf(a_storage)).pointer.child;
+    const BScalar = @typeInfo(@TypeOf(b_storage)).pointer.child;
+    const OutputScalar = @typeInfo(@TypeOf(output_storage)).pointer.child;
+    const a_dtype = comptime Dtype.fromScalar(AScalar);
+    const b_dtype = comptime Dtype.fromScalar(BScalar);
+    const output_dtype = comptime Dtype.fromScalar(OutputScalar);
+    const vector_len = comptime vectorLength(AScalar);
 
     var index: usize = 0;
     while (index + vector_len <= a_storage.len) : (index += vector_len) {
-        const a_values: Vector = a_storage[index..][0..vector_len].*;
-        const b_values: Vector = b_storage[index..][0..vector_len].*;
-        output_storage[index..][0..vector_len].* = Operator.vector(
-            dtype,
+        const a_values: a_dtype.Vector(vector_len) = a_storage[index..][0..vector_len].*;
+        const b_values: b_dtype.Vector(vector_len) = b_storage[index..][0..vector_len].*;
+        output_storage[index..][0..vector_len].* = operation.evaluate(
+            output_dtype,
             vector_len,
-            a_values,
-            b_values,
+            op,
+            .{ a_values, b_values },
         );
     }
     while (index < a_storage.len) : (index += 1) {
-        output_storage[index] = Operator.scalar(dtype, a_storage[index], b_storage[index]);
+        output_storage[index] = operation.evaluateScalar(output_dtype, op, .{ a_storage[index], b_storage[index] });
     }
 }
 
-fn ternary(a: anytype, b: anytype, c: anytype, output: anytype, comptime Operator: type) void {
+fn ternary(a: anytype, b: anytype, c: anytype, output: anytype, comptime op: Operation) void {
     const Output = @TypeOf(output);
     const output_shape = if (comptime hasStaticGeometry(Output)) Output.static_shape else output.shape;
     const a_view = a.broadcastTo(Output.rank, output_shape);
     const b_view = b.broadcastTo(Output.rank, output_shape);
     const c_view = c.broadcastTo(Output.rank, output_shape);
+    const AView = @TypeOf(a_view);
+    const BView = @TypeOf(b_view);
+    const CView = @TypeOf(c_view);
+
+    if (comptime hasStaticGeometry(AView) and
+        hasStaticGeometry(BView) and
+        hasStaticGeometry(CView) and
+        hasStaticGeometry(Output))
+    {
+        if (comptime std.mem.eql(isize, &AView.static_strides, &BView.static_strides) and
+            std.mem.eql(isize, &AView.static_strides, &CView.static_strides) and
+            std.mem.eql(isize, &AView.static_strides, &Output.static_strides) and
+            AView.static_is_dense_positive and
+            BView.static_is_dense_positive and
+            CView.static_is_dense_positive and
+            Output.static_is_dense_positive)
+        {
+            applyTernaryDense(
+                a_view.denseSlice().?,
+                b_view.denseSlice().?,
+                c_view.denseSlice().?,
+                output.denseSlice().?,
+                op,
+            );
+            return;
+        }
+    } else if (std.mem.eql(isize, &a_view.strides, &b_view.strides) and
+        std.mem.eql(isize, &a_view.strides, &c_view.strides) and
+        std.mem.eql(isize, &a_view.strides, &output.strides))
+    {
+        if (a_view.denseSlice()) |a_storage| {
+            if (b_view.denseSlice()) |b_storage| {
+                if (c_view.denseSlice()) |c_storage| {
+                    if (output.denseSlice()) |output_storage| {
+                        applyTernaryDense(a_storage, b_storage, c_storage, output_storage, op);
+                        return;
+                    }
+                }
+            }
+        }
+    }
 
     for (0..output.len()) |linear_index| {
         const a_index = a_view.elementOffsetFromLinear(linear_index);
         const b_index = b_view.elementOffsetFromLinear(linear_index);
         const c_index = c_view.elementOffsetFromLinear(linear_index);
         const output_index = output.elementOffsetFromLinear(linear_index);
-        output.storage[output_index] = Operator.scalar(
+        output.storage[output_index] = operation.evaluateScalar(
             Output.dtype,
-            a_view.storage[a_index],
-            b_view.storage[b_index],
-            c_view.storage[c_index],
+            op,
+            .{ a_view.storage[a_index], b_view.storage[b_index], c_view.storage[c_index] },
         );
     }
 }
 
-pub fn relu(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return @max(value, dtype.zero());
-        }
+fn applyTernaryDense(
+    a_storage: anytype,
+    b_storage: anytype,
+    c_storage: anytype,
+    output_storage: anytype,
+    comptime op: Operation,
+) void {
+    const AScalar = @typeInfo(@TypeOf(a_storage)).pointer.child;
+    const BScalar = @typeInfo(@TypeOf(b_storage)).pointer.child;
+    const CScalar = @typeInfo(@TypeOf(c_storage)).pointer.child;
+    const OutputScalar = @typeInfo(@TypeOf(output_storage)).pointer.child;
+    const a_dtype = comptime Dtype.fromScalar(AScalar);
+    const b_dtype = comptime Dtype.fromScalar(BScalar);
+    const c_dtype = comptime Dtype.fromScalar(CScalar);
+    const output_dtype = comptime Dtype.fromScalar(OutputScalar);
+    const vector_len = comptime vectorLength(OutputScalar);
 
-        fn vector(
-            comptime dtype: Dtype,
-            comptime len: usize,
-            values: dtype.Vector(len),
-        ) dtype.Vector(len) {
-            return @max(values, dtype.vectorZero(len));
-        }
-    });
+    var index: usize = 0;
+    while (index + vector_len <= output_storage.len) : (index += vector_len) {
+        const a_values: a_dtype.Vector(vector_len) = a_storage[index..][0..vector_len].*;
+        const b_values: b_dtype.Vector(vector_len) = b_storage[index..][0..vector_len].*;
+        const c_values: c_dtype.Vector(vector_len) = c_storage[index..][0..vector_len].*;
+        output_storage[index..][0..vector_len].* = operation.evaluate(
+            output_dtype,
+            vector_len,
+            op,
+            .{ a_values, b_values, c_values },
+        );
+    }
+    while (index < output_storage.len) : (index += 1) {
+        output_storage[index] = operation.evaluateScalar(
+            output_dtype,
+            op,
+            .{ a_storage[index], b_storage[index], c_storage[index] },
+        );
+    }
 }
 
-pub fn exp(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return @exp(value);
-        }
-
-        fn vector(
-            comptime dtype: Dtype,
-            comptime len: usize,
-            values: dtype.Vector(len),
-        ) dtype.Vector(len) {
-            return @exp(values);
-        }
-    });
+fn vectorLength(comptime Scalar: type) usize {
+    const NativeScalar = if (Scalar == bool) u8 else Scalar;
+    return std.simd.suggestVectorLength(NativeScalar) orelse 1;
 }
 
-pub fn neg(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return -value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
-            return -values;
-        }
-    });
-}
-
-pub fn abs(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return @abs(value);
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
-            return @abs(values);
-        }
-    });
-}
-
-pub fn sqrt(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return @sqrt(value);
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
-            return @sqrt(values);
-        }
-    });
-}
-
-pub fn log(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return @log(value);
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
-            return @log(values);
-        }
-    });
-}
-
-pub fn reciprocal(input: anytype, output: anytype) void {
-    unary(input, output, struct {
-        fn scalar(comptime dtype: Dtype, value: dtype.Scalar()) dtype.Scalar() {
-            return 1 / value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, values: dtype.Vector(len)) dtype.Vector(len) {
-            const ones: dtype.Vector(len) = @splat(1);
-            return ones / values;
-        }
-    });
-}
-
-pub fn add(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return a_value + b_value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return a_vec + b_vec;
-        }
-    });
-}
-
-pub fn sub(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return a_value - b_value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return a_vec - b_vec;
-        }
-    });
-}
-
-pub fn mul(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return a_value * b_value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return a_vec * b_vec;
-        }
-    });
-}
-
-pub fn div(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return a_value / b_value;
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return a_vec / b_vec;
-        }
-    });
-}
-
-pub fn minimum(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return @min(a_value, b_value);
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return @min(a_vec, b_vec);
-        }
-    });
-}
-
-pub fn maximum(a: anytype, b: anytype, output: anytype) void {
-    binary(a, b, output, struct {
-        fn scalar(comptime dtype: Dtype, a_value: dtype.Scalar(), b_value: dtype.Scalar()) dtype.Scalar() {
-            return @max(a_value, b_value);
-        }
-
-        fn vector(comptime dtype: Dtype, comptime len: usize, a_vec: dtype.Vector(len), b_vec: dtype.Vector(len)) dtype.Vector(len) {
-            return @max(a_vec, b_vec);
-        }
-    });
-}
-
-pub fn clamp(input: anytype, lower: anytype, upper: anytype, output: anytype) void {
-    ternary(input, lower, upper, output, struct {
-        fn scalar(
-            comptime dtype: Dtype,
-            value: dtype.Scalar(),
-            lower_bound: dtype.Scalar(),
-            upper_bound: dtype.Scalar(),
-        ) dtype.Scalar() {
-            return std.math.clamp(value, lower_bound, upper_bound);
-        }
-    });
+pub fn execute(comptime op: Operation, inputs: anytype, output: anytype) void {
+    switch (comptime op.arity()) {
+        1 => unary(inputs[0], output, op),
+        2 => binary(inputs[0], inputs[1], output, op),
+        3 => ternary(inputs[0], inputs[1], inputs[2], output, op),
+        else => @compileError("unsupported pointwise operation arity"),
+    }
 }

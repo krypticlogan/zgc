@@ -46,26 +46,24 @@ pub fn embedPacked(comptime bytes: []const u8) Binding {
 pub fn Plan(
     comptime SourceKey: type,
     comptime capacity: Graph.Capacity,
-    comptime graph: Graph.Graph(capacity),
+    comptime graph: anytype,
     comptime configuration: anytype,
 ) type {
     var bindings: [capacity.max_sources]Binding = @splat(.owned);
+    var configured: [capacity.max_sources]bool = @splat(false);
 
-    for (std.meta.fields(@TypeOf(configuration))) |field| {
-        const key: SourceKey = key: {
-            for (std.meta.fields(SourceKey)) |source_field| {
-                if (std.mem.eql(u8, source_field.name, field.name)) {
-                    break :key @enumFromInt(source_field.value);
-                }
-            }
-            @compileError("source configuration contains an unknown field: " ++ field.name);
-        };
+    for (configuration) |override| {
+        const key: SourceKey = override.source;
         const source_index: usize = @intCast(@intFromEnum(key));
         if (source_index >= graph.sources.len or graph.sources[source_index] == null) {
-            @compileError("source configuration refers to a source that is not used by the graph: " ++ field.name);
+            @compileError("source configuration refers to a source that is not used by the graph: " ++ @tagName(key));
         }
+        if (configured[source_index]) {
+            @compileError("source configuration contains a duplicate source: " ++ @tagName(key));
+        }
+        configured[source_index] = true;
 
-        const binding: Binding = @field(configuration, field.name);
+        const binding: Binding = override.binding;
         const source = graph.sources[source_index].?;
         const tensor = graph.tensors[source.tensor].?;
         const expected_bytes = tensor.shape.elementCount() * tensor.dtype.byteSize();
@@ -84,7 +82,7 @@ pub fn Plan(
                 if (embedded.bytes.len != expected_bytes) {
                     @compileError(std.fmt.comptimePrint(
                         "embedded source '{s}' requires {d} bytes, received {d}",
-                        .{ field.name, expected_bytes, embedded.bytes.len },
+                        .{ @tagName(key), expected_bytes, embedded.bytes.len },
                     ));
                 }
             },
@@ -99,7 +97,10 @@ pub fn Plan(
 
         pub fn bindingForTensor(tensor_info: anytype) Binding {
             return switch (tensor_info.origin) {
-                .source => |source_index| source_bindings[source_index],
+                .source => |source_index| if (comptime source_bindings.len == 0)
+                    unreachable
+                else
+                    source_bindings[source_index],
                 .node => .owned,
                 .literal => |value| .{ .literal = value },
             };

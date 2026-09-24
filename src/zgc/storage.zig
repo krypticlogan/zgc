@@ -170,15 +170,19 @@ fn ReusePlanner(comptime allocation_capacity: usize) type {
 
 pub fn MemoryPlan(
     comptime capacities: Graph.Capacity,
-    comptime g: Graph.Graph(capacities),
+    comptime g: anytype,
     comptime lifetime_analysis: anytype,
     comptime SourcePlan: type,
 ) type {
+    _ = capacities;
     var memory_plan: [g.tensor_ct]?StorageRegion = @splat(null);
     var planner: ReusePlanner(g.tensor_ct) = .{};
 
     var max_alignment: usize = 1;
     for (0..g.tensor_ct) |tensor_id| {
+        if (comptime @hasField(@TypeOf(g), "materialized")) {
+            if (!g.materialized[tensor_id]) continue;
+        }
         const tensor_info = g.tensors[tensor_id].?;
         if (tensor_info.storage_tensor != tensor_id) continue;
         if (!SourcePlan.isOwned(tensor_info)) continue;
@@ -195,6 +199,9 @@ pub fn MemoryPlan(
     }
 
     for (0..g.tensor_ct) |tensor_id| {
+        if (comptime @hasField(@TypeOf(g), "materialized")) {
+            if (!g.materialized[tensor_id]) continue;
+        }
         const storage_tensor = g.tensors[tensor_id].?.storage_tensor;
         if (storage_tensor != tensor_id) {
             memory_plan[tensor_id] = memory_plan[storage_tensor];

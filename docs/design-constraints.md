@@ -1,8 +1,8 @@
 # Design constraints
 
 ZGC specializes a model from compile-time graph metadata while keeping runtime
-data ownership explicit. The following constraints define the current model
-construction and execution flow.
+data ownership explicit. The following constraints define model construction
+and execution.
 
 ## Compile-time model structure
 
@@ -14,14 +14,26 @@ construction and execution flow.
   exact capacities used by graph lowering and memory planning.
 - Shape and operation compatibility errors are reported during compilation when
   their inputs are statically known.
-- The validation backend checks the lowered graph before executable model types
-  are instantiated.
-- The generated model type contains a fixed graph and memory plan; execution
-  does not interpret or allocate graph nodes.
+- Early validation checks the raw semantic graph before analysis. Semantic
+  optimization, fusion, layout planning, and kernel planning are separate
+  compile-time stages. Final validation checks the executable program before
+  model creation.
+- Raw and optimized graphs remain available as compile-time inspection
+  metadata; only the optimized graph drives execution and memory planning.
+- The generated model type contains a fixed executable program and memory plan;
+  execution does not interpret or allocate graph nodes.
 
 ## Source ownership
 
-Every graph source has one storage policy selected by `definition.modelWith`:
+Every graph source has one storage policy. `definition.modelWith` accepts a
+typed slice of `.source` and `.binding` overrides:
+
+```zig
+const Model = definition.modelWith(&.{
+    .{ .source = .input, .binding = zgc.Source.bound },
+    .{ .source = .weights, .binding = zgc.Source.embed(weights_bytes) },
+});
+```
 
 - Owned sources receive an aligned region in model memory and are populated
   through `copyInput` or `copySource`. Values use logical row-major order and
@@ -52,12 +64,20 @@ in the model's mutable memory plan.
   layout traits in their types. Their runtime state contains storage and any
   cursor offset introduced by runtime-selected subviews.
 - Dynamic views retain runtime geometry for explicit low-level use.
-- Lowering may choose a first-axis-contiguous physical layout for eligible
+- Optimization may choose a first-axis-contiguous physical layout for eligible
   rank-2 matmuls and propagate it through compatible dense operations.
 - Matmul parameter and constant right-hand sides retain logical `[K, N]` shape
-  while lowering may store them output-major with physical strides `[1, K]`.
-- Generated matmuls carry a compile-time traversal plan selected from concrete
-  graph layouts. Direct low-level calls must select a concrete strategy.
+  while optimization may store them output-major with physical strides `[1, K]`.
+- Generated matmuls carry a compile-time contraction plan selected after layout planning
+  from concrete graph layouts. Semantic matmul nodes contain no kernel plan.
+- Kernel plans are inert compile-time data. `ExecutableCompute` owns dispatch
+  to map, reduction, and contraction kernel families.
+- Executable invocations contain flattened input and output references and may
+  represent multiple stores. Sibling reduction fusion uses this representation
+  to write independent reduction results from one traversal.
+- Fused elementwise programs contain compile-time operation descriptors and
+  references. Kernels unroll those programs and do not interpret opcodes at
+  runtime.
 - Concatenation materializes distinct contiguous output storage. Its axis and
   input geometry are validated and specialized before execution.
 - Filled tensors alias one scalar storage element through zero strides. They do

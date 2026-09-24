@@ -47,7 +47,7 @@ pub fn Dense(comptime SourceKey: type) type {
                 @compileError("zgc.nn.Dense output_size must be greater than zero");
             }
             if (input.dtype != .f32) {
-                @compileError("zgc.nn.Dense currently supports f32 tensors");
+                @compileError("zgc.nn.Dense currently supports only f32 tensors");
             }
 
             const input_size = input.shape.at(1);

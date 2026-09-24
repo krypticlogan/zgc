@@ -33,18 +33,65 @@ const Definition = zgc.DefinitionBackend(Sources, .{
 
 const Value = Definition.TensorValue;
 
-/// Shift a [H,W,C] tensor by one lattice cell.
-///
-/// dx > 0 moves values right.
-/// dy > 0 moves values downward.
-fn shift2d(
+/// Stream a [H,W,1] population through a domain with halfway bounce-back
+/// walls. A population that would leave the domain returns in its opposite
+/// D2Q9 direction at the same boundary cell.
+fn streamSolid(
     b: *Definition,
-    comptime x: Value,
+    comptime moving: Value,
+    comptime opposite: Value,
     comptime dx: i8,
     comptime dy: i8,
 ) Value {
-    if (dx == 0 and dy == 0) return x;
-    return b.shift(x, &.{ @as(isize, dy), @as(isize, dx), 0 }, .wrap);
+    if (dx == 0 and dy == 0) return moving;
+
+    if (dy == 0) {
+        if (dx > 0) {
+            const wall = b.slice(opposite, .{ .axis = 1, .start = 0, .end = 1 });
+            const interior = b.slice(moving, .{ .axis = 1, .start = 0, .end = W - 1 });
+            return b.concat(&.{ wall, interior }, 1);
+        }
+        const interior = b.slice(moving, .{ .axis = 1, .start = 1, .end = W });
+        const wall = b.slice(opposite, .{ .axis = 1, .start = W - 1, .end = W });
+        return b.concat(&.{ interior, wall }, 1);
+    }
+
+    if (dx == 0) {
+        if (dy > 0) {
+            const wall = b.slice(opposite, .{ .axis = 0, .start = 0, .end = 1 });
+            const interior = b.slice(moving, .{ .axis = 0, .start = 0, .end = H - 1 });
+            return b.concat(&.{ wall, interior }, 0);
+        }
+        const interior = b.slice(moving, .{ .axis = 0, .start = 1, .end = H });
+        const wall = b.slice(opposite, .{ .axis = 0, .start = H - 1, .end = H });
+        return b.concat(&.{ interior, wall }, 0);
+    }
+
+    const moving_rows = if (dy > 0)
+        b.slice(moving, .{ .axis = 0, .start = 0, .end = H - 1 })
+    else
+        b.slice(moving, .{ .axis = 0, .start = 1, .end = H });
+    const opposite_rows = if (dy > 0)
+        b.slice(opposite, .{ .axis = 0, .start = 1, .end = H })
+    else
+        b.slice(opposite, .{ .axis = 0, .start = 0, .end = H - 1 });
+
+    const body = if (dx > 0) blk: {
+        const wall = b.slice(opposite_rows, .{ .axis = 1, .start = 0, .end = 1 });
+        const interior = b.slice(moving_rows, .{ .axis = 1, .start = 0, .end = W - 1 });
+        break :blk b.concat(&.{ wall, interior }, 1);
+    } else blk: {
+        const interior = b.slice(moving_rows, .{ .axis = 1, .start = 1, .end = W });
+        const wall = b.slice(opposite_rows, .{ .axis = 1, .start = W - 1, .end = W });
+        break :blk b.concat(&.{ interior, wall }, 1);
+    };
+
+    if (dy > 0) {
+        const wall = b.slice(opposite, .{ .axis = 0, .start = 0, .end = 1 });
+        return b.concat(&.{ wall, body }, 0);
+    }
+    const wall = b.slice(opposite, .{ .axis = 0, .start = H - 1, .end = H });
+    return b.concat(&.{ body, wall }, 0);
 }
 
 /// Select one D2Q9 population while retaining the channel dimension:
@@ -282,7 +329,8 @@ fn define(b: *Definition) void {
 
     // Stream each population along its lattice direction.
     //
-    // Periodic boundaries come from the shift operation.
+    // Populations that encounter an outer wall bounce into their opposite
+    // direction at the same cell, producing a closed no-slip domain.
     //
     //       6  2  5
     //        \ | /
@@ -292,15 +340,15 @@ fn define(b: *Definition) void {
 
     const s0 = f0;
 
-    const s1 = shift2d(b, f1, 1, 0);
-    const s2 = shift2d(b, f2, 0, 1);
-    const s3 = shift2d(b, f3, -1, 0);
-    const s4 = shift2d(b, f4, 0, -1);
+    const s1 = streamSolid(b, f1, f3, 1, 0);
+    const s2 = streamSolid(b, f2, f4, 0, 1);
+    const s3 = streamSolid(b, f3, f1, -1, 0);
+    const s4 = streamSolid(b, f4, f2, 0, -1);
 
-    const s5 = shift2d(b, f5, 1, 1);
-    const s6 = shift2d(b, f6, -1, 1);
-    const s7 = shift2d(b, f7, -1, -1);
-    const s8 = shift2d(b, f8, 1, -1);
+    const s5 = streamSolid(b, f5, f7, 1, 1);
+    const s6 = streamSolid(b, f6, f8, -1, 1);
+    const s7 = streamSolid(b, f7, f5, -1, -1);
+    const s8 = streamSolid(b, f8, f6, 1, -1);
 
     // Reassemble:
     //

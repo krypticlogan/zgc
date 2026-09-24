@@ -1,8 +1,6 @@
 const std = @import("std");
 
 /// Materialize inputs consecutively along one statically selected axis.
-/// Generated dense layouts use block copies; other layouts use static strided
-/// traversal without runtime shape or dispatch checks.
 pub fn concat(inputs: anytype, output: anytype, comptime concat_axis: i8) void {
     const axis: usize = @intCast(concat_axis);
     if (comptime usesStaticContiguousCopies(@TypeOf(inputs), @TypeOf(output))) {

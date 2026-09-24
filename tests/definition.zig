@@ -30,7 +30,9 @@ test "definition counting and lowering preserve exact graph contracts" {
     try std.testing.expectEqual(@as(usize, 2), counts.max_rank);
     try std.testing.expectEqualSlices(usize, &.{ 3, 7 }, graph.tensors[2].?.shape.slice());
     try std.testing.expectEqual([2]isize{ 7, 1 }, graph.tensors[2].?.layout.strides);
-    try std.testing.expectEqual(zgc.Matmul.Strategy.contracted_axis, graph.nodes[0].?.op.compute.matmul.strategy);
+    try std.testing.expectEqualStrings("contracted_axis", @tagName(graph.nodes[0].?.op.compute.kernel.contraction.strategy));
+    try std.testing.expectEqual(@as(usize, 1), graph.nodes[0].?.output_count);
+    try std.testing.expectEqual(@as(usize, 2), graph.output_refs[graph.nodes[0].?.output_start].?);
     try std.testing.expectEqual(@as(usize, 3), graph.outputs[0].?);
 }
 
@@ -53,7 +55,27 @@ test "lowering fixes batch-oriented layouts and matmul strategy" {
     try std.testing.expectEqual(expected, graph.tensors[3].?.layout.strides);
     try std.testing.expectEqual(expected, graph.tensors[4].?.layout.strides);
     try std.testing.expectEqual(expected, graph.tensors[5].?.layout.strides);
-    try std.testing.expectEqual(zgc.Matmul.Strategy.output_rows, graph.nodes[0].?.op.compute.matmul.strategy);
+    try std.testing.expectEqualStrings("output_rows", @tagName(graph.nodes[0].?.op.compute.kernel.contraction.strategy));
+}
+
+const fusion_candidate_model = model: {
+    var builder = Definition.init();
+    const a = builder.input(.lhs, .f32, &.{4});
+    const b = builder.input(.rhs, .f32, &.{4});
+    const c = builder.input(.auxiliary, .f32, &.{4});
+    builder.output(builder.add(builder.mul(a, b), c));
+    break :model builder.finish().model();
+};
+
+test "analysis identifies a single-consumer elementwise fusion edge" {
+    const raw = fusion_candidate_model.raw_graph;
+    const analysis = fusion_candidate_model.graph_analysis_result;
+
+    try std.testing.expectEqual(@as(usize, 2), raw.node_ct);
+    try std.testing.expect(analysis.fusible_input_refs[2]);
+    try std.testing.expectEqual(@as(usize, 1), analysis.use_counts[3]);
+    try std.testing.expect(!analysis.is_output[3]);
+    try std.testing.expect(analysis.is_output[4]);
 }
 
 const reduction_model = model: {
@@ -67,7 +89,7 @@ const reduction_model = model: {
 };
 
 test "broadcasting and reductions normalize compile-time geometry" {
-    const graph = reduction_model.build_graph;
+    const graph = reduction_model.semantic_graph;
 
     try std.testing.expectEqualSlices(usize, &.{ 2, 3, 4, 5 }, graph.tensors[2].?.shape.slice());
     try std.testing.expectEqualSlices(usize, &.{ 2, 1, 1, 5 }, graph.tensors[3].?.shape.slice());
