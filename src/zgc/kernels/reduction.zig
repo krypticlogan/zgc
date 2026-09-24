@@ -18,14 +18,41 @@ pub fn sum(input: anytype, output: anytype, comptime attrs: Op.Compute.Reduction
 }
 
 pub fn mean(input: anytype, output: anytype, comptime attrs: Op.Compute.ReductionAttrs) void {
+    if (comptime @popCount(attrs.axes) == 1 and !attrs.keep_dims) {
+        const axis: usize = @intCast(@ctz(attrs.axes));
+        for (0..output.len()) |slice_index| {
+            const result = line.sum(input.axisSlice(axis, slice_index));
+            output.storage[output.elementOffsetFromLinear(slice_index)] =
+                accumulation.finish(@TypeOf(input).dtype, .mean, result, input.shape[axis]);
+        }
+        return;
+    }
     reduce(input, output, attrs, Mean);
 }
 
 pub fn min(input: anytype, output: anytype, comptime attrs: Op.Compute.ReductionAttrs) void {
+    if (comptime @popCount(attrs.axes) == 1 and !attrs.keep_dims) {
+        const axis: usize = @intCast(@ctz(attrs.axes));
+        for (0..output.len()) |slice_index| {
+            const result = line.min(input.axisSlice(axis, slice_index));
+            output.storage[output.elementOffsetFromLinear(slice_index)] =
+                accumulation.narrowScalar(@TypeOf(input).dtype, result);
+        }
+        return;
+    }
     reduce(input, output, attrs, Min);
 }
 
 pub fn max(input: anytype, output: anytype, comptime attrs: Op.Compute.ReductionAttrs) void {
+    if (comptime @popCount(attrs.axes) == 1 and !attrs.keep_dims) {
+        const axis: usize = @intCast(@ctz(attrs.axes));
+        for (0..output.len()) |slice_index| {
+            const result = line.max(input.axisSlice(axis, slice_index));
+            output.storage[output.elementOffsetFromLinear(slice_index)] =
+                accumulation.narrowScalar(@TypeOf(input).dtype, result);
+        }
+        return;
+    }
     reduce(input, output, attrs, Max);
 }
 

@@ -1,9 +1,8 @@
 const Graph = @import("../graph.zig");
 const Tensor = @import("../tensor.zig");
-
-/// Sequential executable schedule. Unlike semantic graph nodes, one
-/// invocation may write several tensors.
-pub fn Program(comptime capacity: Graph.Capacity, comptime Operation: type) type {
+/// A complete executable program. Its node sequence is the literal execution
+/// schedule, and one invocation may write several tensors.
+pub fn Executable(comptime capacity: Graph.Capacity, Operation: type) type {
     return struct {
         const Self = @This();
         pub const max_rank = capacity.max_rank;

@@ -3,9 +3,27 @@ const Op = @import("../operations/semantic.zig").Op;
 const Tensor = @import("../tensor.zig");
 const layout_ops = @import("../kernels/layout.zig");
 
+pub fn count(comptime Definition: type, comptime definition: Definition) Graph.Capacity {
+    var capacity: Graph.Capacity = .{
+        .max_nodes = definition.node_count,
+        .max_input_refs = definition.input_ref_count,
+        .max_tensors = definition.tensor_count,
+        .max_outputs = definition.output_count,
+    };
+
+    for (definition.tensors[0..definition.tensor_count]) |record| {
+        capacity.max_rank = @max(capacity.max_rank, record.value.shape.rank);
+        switch (record.origin) {
+            .source => |source_index| capacity.max_sources = @max(capacity.max_sources, source_index + 1),
+            .node, .literal => {},
+        }
+    }
+    return capacity;
+}
+
 /// Lowers a completed definition into the concrete graph sized by the counting
-/// backend.
-pub fn GraphBackend(
+/// step.
+pub fn GraphConstruction(
     comptime Definition: type,
     comptime capacity: Graph.Capacity,
 ) type {
@@ -55,11 +73,11 @@ pub fn GraphBackend(
                         }
 
                         const info: TensorInfo = switch (node.op) {
-                            .compute => |compute| .{
+                            .compute => .{
                                 .dtype = record.value.dtype,
                                 .shape = shape,
                                 .origin = .{ .node = node_id },
-                                .layout = computeLayout(compute, shape),
+                                .layout = .contiguous(shape),
                                 .storage_tensor = tensor_id,
                             },
                             .view => |view| blk: {
@@ -93,14 +111,6 @@ pub fn GraphBackend(
                 graph.insertOutput(definition.outputs[output_index]);
             }
             return graph;
-        }
-
-        fn computeLayout(
-            comptime op: @import("../operations/semantic.zig").Op.Compute,
-            shape: Tensor.Shape(capacity.max_rank),
-        ) Tensor.Layout(capacity.max_rank) {
-            _ = op;
-            return .contiguous(shape);
         }
     };
 }

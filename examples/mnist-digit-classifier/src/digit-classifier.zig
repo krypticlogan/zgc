@@ -19,7 +19,7 @@ pub const Sources = enum(usize) {
     b3,
 };
 
-pub const Definition = zgc.DefinitionBackend(Sources, .{
+pub const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
     .max_nodes = 12,
     .max_tensors = 19,

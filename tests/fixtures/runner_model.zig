@@ -1,7 +1,7 @@
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 1,
     .max_nodes = 1,
     .max_tensors = 2,

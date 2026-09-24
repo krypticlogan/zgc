@@ -24,7 +24,7 @@ pub const WeightLayout = enum {
 };
 
 /// Configuration for a fully connected graph layer. Applying the layer adds
-/// its parameter sources and computation to a `DefinitionBackend`.
+/// its parameter sources and computation to a `DefinitionBuilder`.
 pub fn Dense(comptime SourceKey: type) type {
     return struct {
         const Self = @This();

@@ -74,9 +74,10 @@ fn hasLogicalRowMajorLayout(comptime info: anytype) bool {
 pub fn Model(
     comptime SourceKey: type,
     comptime capacities: Graph.Capacity,
-    comptime EarlyValidated: type,
+    comptime raw: anytype,
     comptime SemanticValidated: type,
-    comptime graph_analysis: anytype,
+    comptime semantic_analysis: anytype,
+    comptime executable_search: anytype,
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
@@ -87,13 +88,18 @@ pub fn Model(
         const Self = @This();
         pub const SourceKeyType = SourceKey;
         pub const SourceError = error{SourceSizeMismatch};
-        pub const build_graph = graph;
+        pub const executable = graph;
         pub const memory_plan = plan;
         pub const internal_capacity = capacities;
-        pub const raw_graph = EarlyValidated.graph;
+        pub const raw_graph = raw;
         pub const semantic_graph = SemanticValidated.graph;
-        pub const optimized_graph = graph;
-        pub const graph_analysis_result = graph_analysis;
+        pub const semantic_analysis_result = semantic_analysis;
+        pub const reference_executable_candidate = executable_search.reference;
+        pub const executable_candidate_frontier = executable_search.frontier;
+        pub const executable_candidate_count = executable_search.generated_count;
+        pub const fusion_candidate_count = executable_search.fusion_candidate_count;
+        pub const layout_candidate_count = executable_search.layout_candidate_count;
+        pub const selected_executable_candidate = executable_search.selected();
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
 

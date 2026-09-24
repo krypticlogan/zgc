@@ -21,7 +21,7 @@ const Sources = enum(usize) {
     weights,
 };
 
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 3,
 
     // Collision and streaming make this graph larger than the default limits.

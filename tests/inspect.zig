@@ -12,7 +12,7 @@ test "inspection renders a generated model through a writer" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Capacity(nodes=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "transpose(axes=0,1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "relu(t1) -> t2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Graph structure:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Executable structure:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "MemoryPlan(bytes=48") != null);
 }
 
@@ -22,7 +22,7 @@ test "inspection CLI selects individual representations" {
     try std.testing.expect(try zgc.Inspect.runCli(Model, &.{"summary"}, &writer));
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "== Capacity ==") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "== Graph ==") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "== Executable ==") == null);
 }
 
 test "inspection CLI reports invalid commands" {

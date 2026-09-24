@@ -21,20 +21,25 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ### Definition and compilation
 
-- A concrete, typed `DefinitionBackend` is the public model-builder.
+- A concrete, typed `DefinitionBuilder` is the public model-builder.
 - Models are defined once and compiled with `definition.model()`.
 - Internal counting derives exact capacities within configurable definition
   bounds.
 - Raw graph construction preserves stable tensor IDs, source indices, operation
   order, outputs, shapes, and dtypes.
-- Semantic optimization, fusion, layout planning, and kernel planning have
-  distinct pass boundaries. Final validation checks executable layouts and
-  kernel-plan contracts.
+- Semantic validation and analysis feed fusion and layout analyses. Those
+  analyses emit candidate regions and regimes rather than rewriting one
+  canonical executable.
+- Executable planning combines those alternatives, realizes kernel plans,
+  generates semantic, memory-pressure, and critical-path schedules, and keeps
+  the generic reference candidate. Exact lifetime and memory planning precede
+  structured costing and Pareto pruning.
 - Executable programs use multi-output invocation records. Compatible sibling
   reductions share one invocation and write independent results.
-- Generated model types retain raw and optimized graphs for inspection. Use
-  counts, output markers, and legal elementwise fusion edges are available from
-  graph analysis.
+- Generated model types retain raw and semantic graphs, the active executable,
+  a legal reference candidate, the candidate frontier, and deterministic
+  selection metadata for inspection. Use counts and output markers are
+  available from semantic analysis.
 - Lifetime analysis consolidates alias uses onto storage roots and provides
   half-open intervals to memory planning.
 - Invalid ranks, shapes, axes, dtypes, input counts, and broadcasting are
@@ -65,7 +70,7 @@ on Zig 0.16.0. The API should still be expected to change.
 | Copy/contiguous | Fresh storage with lowering-selected or logical row-major layout |
 | Pad/shift/windows | Materialized constant padding, shifts with wrap/edge/reflect/constant boundaries, and zero-copy overlapping trailing-axis windows |
 | Matmul | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal |
-| Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, and strided traversal; mean is floating-point |
+| Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, SIMD contiguous-axis traversal with scalar tails, and strided fallback; mean is floating-point |
 | Softmax | Stable single-axis floating-point implementation, including strided axes |
 | Concat | Matching-rank and matching-dtype inputs materialized along one compile-time axis |
 | Structural views | Transpose, permutation, reshape, flatten, squeeze, unsqueeze, slicing, and explicit broadcasting aliases with no runtime kernels |
@@ -109,8 +114,12 @@ on Zig 0.16.0. The API should still be expected to change.
 - Layout selection is limited to packed matmul right-hand parameters, the
   matmul batch heuristic, and compatible result propagation. Fusion forms
   single-consumer pointwise maps, producer-to-reduction regions, and compatible
-  sibling reductions. Constant folding, common-subexpression elimination,
-  dead-node elimination, and general cost-based planning are not implemented.
+  sibling reductions. Search currently compares unfused/discovered fusion and
+  canonical/propagated layout regimes. Constant folding,
+  common-subexpression elimination, dead-node elimination, explicit
+  layout-conversion insertion, and contraction implementation enumeration are
+  not implemented. Candidate selection is deterministic and supplies the
+  active executable.
 - Softmax and reductions traverse propagated layouts correctly, but do not yet
   have a dedicated batch-oriented lowering and kernel strategy for every axis.
 - Matmul is a direct specialized kernel, not a tuned BLAS replacement.
@@ -129,6 +138,8 @@ The test suite exercises:
 - source indexing, graph materialization, and multiple ranks/outputs;
 - shape, dtype, axis, rank, and broadcasting validation;
 - aligned memory planning and source loading;
+- reference/optimized schedule generation, structured cost comparison, and
+  Pareto-frontier retention;
 - model execution and typed output access;
 - contiguous, offset, broadcast, transposed, and negative-stride views;
 - unary math, arithmetic, comparisons, boolean logic, selection, matmul,

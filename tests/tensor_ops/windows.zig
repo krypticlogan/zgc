@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const LifeSources = enum(usize) { world };
-const LifeDefinition = zgc.DefinitionBackend(LifeSources, .{
+const LifeDefinition = zgc.DefinitionBuilder(LifeSources, .{
     .max_rank = 4,
     .max_nodes = 12,
     .max_tensors = 18,
@@ -37,7 +37,7 @@ const life_step = model: {
 };
 
 test "padding and one overlapping window view express a Conway step" {
-    const graph = life_step.build_graph;
+    const graph = life_step.executable;
     const padded = graph.tensors[2].?;
     const neighborhoods = graph.tensors[3].?;
 
@@ -61,7 +61,7 @@ test "padding and one overlapping window view express a Conway step" {
 }
 
 const WindowSources = enum(usize) { input };
-const WindowDefinition = zgc.DefinitionBackend(WindowSources, .{
+const WindowDefinition = zgc.DefinitionBuilder(WindowSources, .{
     .max_rank = 2,
     .max_nodes = 2,
     .max_tensors = 3,
@@ -82,7 +82,7 @@ const dilated_windows = model: {
 };
 
 test "window strides and dilation produce static overlapping geometry" {
-    const window = dilated_windows.build_graph.tensors[1].?;
+    const window = dilated_windows.executable.tensors[1].?;
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, window.shape.slice());
     try std.testing.expectEqual([2]isize{ 2, 2 }, window.layout.strides[0..2].*);
 

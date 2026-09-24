@@ -5,7 +5,7 @@ const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
 const SourceStorage = @import("../source.zig");
 const Tensor = @import("../tensor.zig");
-
+const Capacity = @import("../graph.zig").Capacity;
 pub const Limits = struct {
     max_rank: usize = 8,
     max_nodes: usize = 64,
@@ -103,7 +103,7 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
         pub fn model(comptime definition: Self) type {
-            return @import("pipeline.zig").model(
+            return @import("root.zig").model(
                 Self,
                 definition,
                 @as([]const SourceOverride, &.{}),
@@ -112,13 +112,33 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
 
         /// Compile this definition with typed source-storage overrides.
         pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
-            return @import("pipeline.zig").model(Self, definition, sources);
+            return @import("root.zig").model(Self, definition, sources);
+        }
+
+        pub fn counts(comptime definition: Definition) Capacity {
+            var capacity: Capacity = .{
+                .max_nodes = definition.node_count,
+                .max_input_refs = definition.input_ref_count,
+                .max_tensors = definition.tensor_count,
+                .max_outputs = definition.output_count,
+            };
+
+            for (definition.tensors[0..definition.tensor_count]) |record| {
+                capacity.max_rank = @max(capacity.max_rank, record.value.shape.rank);
+                switch (record.origin) {
+                    .source => |source_index| {
+                        capacity.max_sources = @max(capacity.max_sources, source_index + 1);
+                    },
+                    .node, .literal => {},
+                }
+            }
+            return capacity;
         }
     };
 }
 
-/// The typed, front-facing model-definition backend.
-pub fn DefinitionBackend(comptime SourceKey: type, comptime limits: Limits) type {
+/// The typed, front-facing model-definition builder.
+pub fn DefinitionBuilder(comptime SourceKey: type, comptime limits: Limits) type {
     const source_capacity = enumCapacity(SourceKey);
     const DefinitionType = Definition(SourceKey, limits);
     const ValueType = DefinitionType.ValueType;
@@ -702,7 +722,7 @@ fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: i8) usi
 
 fn enumCapacity(comptime Enum: type) usize {
     const info = @typeInfo(Enum);
-    if (info != .@"enum") @compileError("DefinitionBackend source keys must be an enum type");
+    if (info != .@"enum") @compileError("DefinitionBuilder source keys must be an enum type");
     var capacity: usize = 0;
     for (info.@"enum".fields) |field| {
         if (field.value < 0) @compileError("source enum values must be non-negative");

@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { lhs, rhs, auxiliary };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 4,
     .max_nodes = 6,
     .max_tensors = 8,
@@ -20,7 +20,7 @@ const matmul_model = model: {
 
 test "definition counting and lowering preserve exact graph contracts" {
     const counts = matmul_model.internal_capacity;
-    const graph = matmul_model.build_graph;
+    const graph = matmul_model.executable;
 
     try std.testing.expectEqual(@as(usize, 2), counts.max_nodes);
     try std.testing.expectEqual(@as(usize, 4), counts.max_tensors);
@@ -47,7 +47,7 @@ const batch_model = model: {
 };
 
 test "lowering fixes batch-oriented layouts and matmul strategy" {
-    const graph = batch_model.build_graph;
+    const graph = batch_model.executable;
     const batch = std.simd.suggestVectorLength(f32) orelse 4;
     const expected = [2]isize{ 1, batch };
 
@@ -67,12 +67,11 @@ const fusion_candidate_model = model: {
     break :model builder.finish().model();
 };
 
-test "analysis identifies a single-consumer elementwise fusion edge" {
+test "semantic analysis records tensor uses and outputs" {
     const raw = fusion_candidate_model.raw_graph;
-    const analysis = fusion_candidate_model.graph_analysis_result;
+    const analysis = fusion_candidate_model.semantic_analysis_result;
 
     try std.testing.expectEqual(@as(usize, 2), raw.node_ct);
-    try std.testing.expect(analysis.fusible_input_refs[2]);
     try std.testing.expectEqual(@as(usize, 1), analysis.use_counts[3]);
     try std.testing.expect(!analysis.is_output[3]);
     try std.testing.expect(analysis.is_output[4]);
@@ -112,7 +111,7 @@ const structural_model = model: {
 };
 
 test "structural operations lower to one static alias chain" {
-    const graph = structural_model.build_graph;
+    const graph = structural_model.executable;
     const output = graph.tensors[6].?;
 
     try std.testing.expectEqualSlices(usize, &.{ 3, 4 }, output.shape.slice());
@@ -156,7 +155,7 @@ const predicate_model = model: {
 };
 
 test "comparisons and selection carry explicit boolean dtype through lowering" {
-    const graph = predicate_model.build_graph;
+    const graph = predicate_model.executable;
     const condition = graph.tensors[2].?;
     const selected = graph.tensors[5].?;
 
@@ -174,7 +173,7 @@ test "comparisons and selection carry explicit boolean dtype through lowering" {
 }
 
 test "primitive builders infer every math and predicate operation without model generation" {
-    const PrimitiveDefinition = zgc.DefinitionBackend(enum(usize) { input }, .{
+    const PrimitiveDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
         .max_rank = 2,
         .max_nodes = 24,
         .max_tensors = 28,

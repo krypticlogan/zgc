@@ -15,7 +15,7 @@ pub fn execute(
     if (outputs.len != 1 or plan.region.stores.len != 1) {
         @compileError("map kernel currently requires exactly one output store");
     }
-    executeProgram(plan.region.expressions, plan.schedule.vector_width, inputs, outputs[0]);
+    executeProgram(plan.region.expressions, plan.traversal_plan.vector_width, inputs, outputs[0]);
 }
 
 fn executeProgram(

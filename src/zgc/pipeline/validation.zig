@@ -1,32 +1,108 @@
 const std = @import("std");
-const Execution = @import("../execution.zig");
 const Graph = @import("../graph.zig");
-const Semantic = @import("../operations/semantic.zig");
+const Op = @import("../operations/semantic.zig").Op;
 const Tensor = @import("../tensor.zig");
 const layout_ops = @import("../kernels/layout.zig");
 const Plan = @import("../execution/kernel_plan.zig");
 const fusion = @import("../optimization/fusion/expression.zig");
 const matmul = @import("../optimization/matmul.zig");
 
+/// Validates the constructed semantic graph before analysis.
+pub fn Validation(comptime capacity: Graph.Capacity) type {
+    return struct {
+        pub fn validate(comptime lowered_graph: Graph.Graph(capacity, Op)) type {
+            inline for (0..lowered_graph.node_ct) |node_id| {
+                const node = lowered_graph.nodes[node_id].?;
+                const output = lowered_graph.tensors[node.result].?;
+                const Inputs = [node.input_count]Graph.Graph(capacity, Op).TensorInfo;
+                var inputs: Inputs = undefined;
+                inline for (0..node.input_count) |input_index| {
+                    const tensor_id = lowered_graph.input_refs[node.input_start + input_index].?;
+                    inputs[input_index] = lowered_graph.tensors[tensor_id].?;
+                }
+
+                switch (node.op) {
+                    .view => |view| {
+                        const expected = layout_ops.infer(view, &inputs, output.shape, capacity.max_rank);
+                        if (!std.mem.eql(usize, expected.shape.slice(), output.shape.slice()) or
+                            expected.layout.offset != output.layout.offset or
+                            !std.mem.eql(
+                                isize,
+                                expected.layout.strides[0..output.shape.rank],
+                                output.layout.strides[0..output.shape.rank],
+                            ) or expected.storage_tensor != output.storage_tensor)
+                        {
+                            @compileError("lowered view metadata does not match its inferred alias");
+                        }
+                        if (output.dtype != inputs[0].dtype) {
+                            @compileError("view output dtype does not match its input dtype");
+                        }
+                    },
+                    .compute => |compute| {
+                        const expected_shape = compute.inferShape(&inputs, capacity.max_rank);
+                        if (!std.mem.eql(usize, expected_shape.slice(), output.shape.slice())) {
+                            @compileError("lowered operation output shape does not match its inferred shape");
+                        }
+                        const expected_dtype = compute.inferDtype(&inputs);
+                        if (output.dtype != expected_dtype) {
+                            @compileError("lowered operation output dtype does not match its inferred dtype");
+                        }
+                    },
+                }
+            }
+            return struct {
+                pub const graph = lowered_graph;
+
+                pub fn View(comptime tensor_id: Tensor.Id) type {
+                    const info = tensorInfo(tensor_id);
+                    return Tensor.StaticView(
+                        info.dtype.Scalar(),
+                        info.shape.dims[0..info.shape.rank].*,
+                        info.layout.strides[0..info.shape.rank].*,
+                        info.layout.offset,
+                    );
+                }
+
+                pub fn ConstView(comptime tensor_id: Tensor.Id) type {
+                    const info = tensorInfo(tensor_id);
+                    return Tensor.StaticConstView(
+                        info.dtype.Scalar(),
+                        info.shape.dims[0..info.shape.rank].*,
+                        info.layout.strides[0..info.shape.rank].*,
+                        info.layout.offset,
+                    );
+                }
+
+                fn tensorInfo(comptime tensor_id: Tensor.Id) Graph.Graph(capacity, Op).TensorInfo {
+                    if (tensor_id >= graph.tensor_ct) {
+                        @compileError("tensor id is outside the validated graph");
+                    }
+                    return graph.tensors[tensor_id].?;
+                }
+            };
+        }
+    };
+}
+
 /// Validates optimizer output before lifetime analysis and model generation.
 /// Failures here indicate an invalid compiler rewrite or execution plan.
-pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
+pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
     return struct {
-        pub fn validate(comptime optimized_graph: anytype) type {
-            const Program = @TypeOf(optimized_graph);
-            inline for (0..optimized_graph.node_ct) |node_id| {
-                const node = optimized_graph.nodes[node_id].?;
+        pub fn validate(comptime executable: anytype) type {
+            const Program = @TypeOf(executable);
+            inline for (0..executable.node_ct) |node_id| {
+                const node = executable.nodes[node_id].?;
                 const Inputs = [node.input_count]Program.TensorInfo;
                 var inputs: Inputs = undefined;
                 inline for (0..node.input_count) |input_index| {
-                    const tensor_id = optimized_graph.input_refs[node.input_start + input_index].?;
-                    inputs[input_index] = optimized_graph.tensors[tensor_id].?;
+                    const tensor_id = executable.input_refs[node.input_start + input_index].?;
+                    inputs[input_index] = executable.tensors[tensor_id].?;
                 }
                 const Outputs = [node.output_count]Program.TensorInfo;
                 var outputs: Outputs = undefined;
                 inline for (0..node.output_count) |output_index| {
-                    const tensor_id = optimized_graph.output_refs[node.output_start + output_index].?;
-                    outputs[output_index] = optimized_graph.tensors[tensor_id].?;
+                    const tensor_id = executable.output_refs[node.output_start + output_index].?;
+                    outputs[output_index] = executable.tensors[tensor_id].?;
                 }
 
                 switch (node.op) {
@@ -53,7 +129,7 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
             }
 
             return struct {
-                pub const graph = optimized_graph;
+                pub const graph = executable;
 
                 pub fn View(comptime tensor_id: Tensor.Id) type {
                     const info = tensorInfo(tensor_id);
@@ -82,7 +158,7 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
             };
         }
 
-        fn validateView(comptime view: Semantic.Op.View, comptime inputs: anytype, comptime output: anytype) void {
+        fn validateView(comptime view: Op.View, comptime inputs: anytype, comptime output: anytype) void {
             const expected = layout_ops.infer(view, inputs, output.shape, capacity.max_rank);
             if (!std.mem.eql(usize, expected.shape.slice(), output.shape.slice()) or
                 expected.layout.offset != output.layout.offset or
@@ -94,7 +170,7 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
             if (output.dtype != inputs[0].dtype) @compileError("optimized view output dtype does not match its input");
         }
 
-        fn validateSemantic(comptime compute: Semantic.Op.Compute, comptime inputs: anytype, comptime output: anytype) void {
+        fn validateSemantic(comptime compute: Op.Compute, comptime inputs: anytype, comptime output: anytype) void {
             const expected_shape = compute.inferShape(inputs, capacity.max_rank);
             if (!std.mem.eql(usize, expected_shape.slice(), output.shape.slice())) {
                 @compileError("optimized operation output shape does not match semantic inference");
@@ -120,27 +196,27 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
                 },
                 .input, .accumulator => @compileError("map store must reference an expression instruction"),
             }
-            if (plan.schedule.vector_width == 0 or plan.schedule.unroll == 0) {
-                @compileError("map schedule factors must be nonzero");
+            if (plan.traversal_plan.vector_width == 0 or plan.traversal_plan.unroll == 0) {
+                @compileError("map traversal factors must be nonzero");
             }
-            if (plan.schedule.axis_order.len != outputs[0].shape.rank) {
-                @compileError("map schedule must order every output axis");
+            if (plan.traversal_plan.axis_order.len != outputs[0].shape.rank) {
+                @compileError("map traversal plan must order every output axis");
             }
             var seen: [capacity.max_rank]bool = @splat(false);
-            for (plan.schedule.axis_order) |axis| {
+            for (plan.traversal_plan.axis_order) |axis| {
                 if (axis >= outputs[0].shape.rank or seen[axis]) @compileError("map axis order is invalid");
                 seen[axis] = true;
             }
-            if (plan.schedule.vector_axis) |axis| {
+            if (plan.traversal_plan.vector_axis) |axis| {
                 if (axis >= outputs[0].shape.rank) @compileError("map vector axis is outside the output rank");
-            } else if (plan.schedule.vector_width != 1) {
-                @compileError("scalar map schedules must have vector width one");
+            } else if (plan.traversal_plan.vector_width != 1) {
+                @compileError("scalar map traversal plans must have vector width one");
             }
         }
 
         fn validateReductionPlan(comptime plan: Plan.ReductionPlan, comptime inputs: anytype, comptime outputs: anytype) void {
             const region = plan.region;
-            const schedule = plan.schedule;
+            const traversal_plan = plan.traversal_plan;
             const rank = region.domain_shape.len;
 
             if (outputs.len == 0) @compileError("reduction plan requires an output");
@@ -206,21 +282,40 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
                 if (!stored) @compileError("reduction plan contains an unused accumulator");
             }
 
-            if (schedule.vector_width == 0 or schedule.accumulator_lanes == 0 or schedule.unroll == 0) {
-                @compileError("reduction schedule factors must be nonzero");
+            if (traversal_plan.vector_width == 0 or traversal_plan.accumulator_lanes == 0 or traversal_plan.unroll == 0) {
+                @compileError("reduction traversal factors must be nonzero");
             }
-            if (schedule.vector_axis == null and schedule.vector_width != 1) {
-                @compileError("a scalar reduction schedule must have vector width one");
+            if (traversal_plan.vector_axis == null and traversal_plan.vector_width != 1) {
+                @compileError("a scalar reduction traversal plan must have vector width one");
             }
-            if (schedule.vector_axis) |axis| {
+            if (traversal_plan.vector_axis) |axis| {
                 if (axis >= rank) @compileError("reduction vector axis is outside the domain rank");
+                if (region.reduction_axes & (@as(u64, 1) << @intCast(axis)) == 0) {
+                    @compileError("reduction vector axis must be a reduced axis");
+                }
+                if (region.domain_shape[axis] < traversal_plan.vector_width) {
+                    @compileError("reduction vector axis is shorter than its vector width");
+                }
+                for (inputs) |input| {
+                    if (!supportsReductionVectorAxis(input, region.domain_shape, axis)) {
+                        @compileError("reduction input is neither contiguous nor broadcast on its vector axis");
+                    }
+                }
             }
             validateReductionAxisOrder(
                 rank,
                 region.reduction_axes,
-                schedule.outer_axis_order,
-                schedule.reduction_axis_order,
+                traversal_plan.outer_axis_order,
+                traversal_plan.reduction_axis_order,
             );
+        }
+
+        fn supportsReductionVectorAxis(comptime input: anytype, comptime domain_shape: []const usize, comptime axis: usize) bool {
+            const leading_axes = domain_shape.len - input.shape.rank;
+            if (axis < leading_axes) return true;
+            const input_axis = axis - leading_axes;
+            if (input.shape.at(input_axis) == 1 and domain_shape[axis] != 1) return true;
+            return input.layout.strides[input_axis] == 1;
         }
 
         fn validateReductionExpressions(
@@ -267,7 +362,7 @@ pub fn FinalValidationBackend(comptime capacity: Graph.Capacity) type {
             comptime reduction_order: []const u8,
         ) void {
             if (outer_order.len + reduction_order.len != rank) {
-                @compileError("reduction schedule axes must partition the domain");
+                @compileError("reduction traversal axes must partition the domain");
             }
             var seen: [rank]bool = @splat(false);
             for (outer_order) |axis| {

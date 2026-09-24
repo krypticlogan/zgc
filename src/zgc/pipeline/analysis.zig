@@ -2,25 +2,72 @@ const Elementwise = @import("../operations/elementwise.zig");
 const Reduction = @import("../operations/reduction.zig");
 const Graph = @import("../graph.zig");
 const Semantic = @import("../operations/semantic.zig");
-const Analysis = @import("analysis.zig").Analysis;
+const Tensor = @import("../tensor.zig");
+const layout_ops = @import("../kernels/layout.zig");
+const matmul = @import("../optimization/matmul.zig");
 
-/// Select fusion regions for logical reductions and pointwise maps.
-/// Selected regions retain semantic tensor ids until physical kernel planning.
-pub fn Fusion(comptime capacity: Graph.Capacity) type {
+pub fn SemanticAnalysis() type {
+    return struct {
+        pub fn analyze(comptime Validated: type) Facts(Validated.graph.tensor_ct) {
+            const graph = Validated.graph;
+            var result: Facts(graph.tensor_ct) = .{};
+
+            for (0..graph.node_ct) |node_id| {
+                const node = graph.nodes[node_id].?;
+                for (0..node.input_count) |input_index| {
+                    const ref_index = node.input_start + input_index;
+                    result.use_counts[graph.input_refs[ref_index].?] += 1;
+                }
+            }
+            for (0..graph.output_ct) |output_index| {
+                result.is_output[graph.outputs[output_index].?] = true;
+            }
+
+            return result;
+        }
+    };
+}
+
+pub fn Facts(comptime tensor_count: usize) type {
+    return struct {
+        use_counts: [tensor_count]usize = @splat(0),
+        is_output: [tensor_count]bool = @splat(false),
+    };
+}
+
+/// Discover legal fusion-region alternatives without selecting one.
+pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
     return struct {
         const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
-        const GraphFacts = Analysis(capacity.max_tensors, capacity.max_input_refs);
+        const GraphFacts = Facts(capacity.max_tensors);
+        const Result = FusionCandidates(capacity.max_nodes);
 
-        pub fn form(comptime semantic_graph: SemanticGraph, comptime analysis: GraphFacts) type {
-            const selection = comptime select(semantic_graph, analysis);
-            return struct {
-                pub const graph = semantic_graph;
-                pub const regions = selection;
-            };
+        pub fn analyze(comptime semantic_graph: SemanticGraph, comptime analysis: GraphFacts) Result {
+            var candidates: Result = .{};
+            candidates.add(.{
+                .regime = .unfused,
+                .regions = .{},
+            });
+
+            const discovered = select(semantic_graph, analysis);
+            if (hasSelectedRegion(semantic_graph, discovered)) {
+                candidates.add(.{
+                    .regime = .discovered,
+                    .regions = discovered,
+                });
+            }
+            return candidates;
         }
 
-        fn select(comptime graph: SemanticGraph, comptime analysis: GraphFacts) Selection(capacity.max_nodes) {
-            var result: Selection(capacity.max_nodes) = .{};
+        fn hasSelectedRegion(comptime graph: SemanticGraph, selection: FusionSelection(capacity.max_nodes)) bool {
+            for (selection.node_region[0..graph.node_ct]) |region| {
+                if (region != null) return true;
+            }
+            return false;
+        }
+
+        fn select(comptime graph: SemanticGraph, comptime analysis: GraphFacts) FusionSelection(capacity.max_nodes) {
+            var result: FusionSelection(capacity.max_nodes) = .{};
 
             for (0..graph.node_ct) |node_id| {
                 const descriptor = reductionForNode(graph, node_id) orelse continue;
@@ -62,8 +109,7 @@ pub fn Fusion(comptime capacity: Graph.Capacity) type {
                     has_producer = markFoldedProducers(graph, analysis, input_id, &group.nodes) or has_producer;
                 }
 
-                group.active = group.reduction_count > 1 or has_producer;
-                if (!group.active) continue;
+                if (group.reduction_count == 1 and !has_producer) continue;
                 for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
                     result.node_region[maybe_node_id.?] = .{ .reduction = region_id };
                 }
@@ -111,7 +157,7 @@ pub fn Fusion(comptime capacity: Graph.Capacity) type {
         fn hasUnassignedPointwiseConsumer(
             comptime graph: SemanticGraph,
             comptime analysis: GraphFacts,
-            comptime selection: Selection(capacity.max_nodes),
+            comptime selection: FusionSelection(capacity.max_nodes),
             comptime producer_id: usize,
         ) bool {
             const result_id = graph.nodes[producer_id].?.result;
@@ -129,7 +175,7 @@ pub fn Fusion(comptime capacity: Graph.Capacity) type {
         fn markMapProducers(
             comptime graph: SemanticGraph,
             comptime analysis: GraphFacts,
-            comptime selection: Selection(capacity.max_nodes),
+            comptime selection: FusionSelection(capacity.max_nodes),
             comptime tensor_id: usize,
             group: *MapGroup(capacity.max_nodes),
         ) void {
@@ -247,17 +293,44 @@ pub fn Fusion(comptime capacity: Graph.Capacity) type {
     };
 }
 
-pub fn Selection(comptime node_count: usize) type {
+pub const FusionRegime = enum {
+    unfused,
+    discovered,
+};
+
+pub fn FusionCandidate(comptime node_count: usize) type {
+    return struct {
+        regime: FusionRegime,
+        regions: FusionSelection(node_count),
+    };
+}
+
+pub fn FusionCandidates(comptime node_count: usize) type {
+    return struct {
+        const Self = @This();
+        pub const max_count = 2;
+
+        values: [max_count]?FusionCandidate(node_count) = .{null} ** max_count,
+        count: usize = 0,
+
+        fn add(candidates: *Self, candidate: FusionCandidate(node_count)) void {
+            candidates.values[candidates.count] = candidate;
+            candidates.count += 1;
+        }
+    };
+}
+
+pub fn FusionSelection(comptime node_count: usize) type {
     return struct {
         reduction_storage: [node_count]?Group(node_count) = .{null} ** node_count,
         map_storage: [node_count]?MapGroup(node_count) = .{null} ** node_count,
-        node_region: [node_count]?RegionRef = .{null} ** node_count,
+        node_region: [node_count]?FusionRegionRef = .{null} ** node_count,
         region_count: usize = 0,
         map_count: usize = 0,
     };
 }
 
-pub const RegionRef = union(enum) { reduction: usize, map: usize };
+pub const FusionRegionRef = union(enum) { reduction: usize, map: usize };
 
 pub fn MapGroup(comptime node_count: usize) type {
     return struct {
@@ -276,6 +349,128 @@ pub fn Group(comptime node_count: usize) type {
         reduction_count: usize = 0,
         nodes: [node_count]bool = @splat(false),
         emit_node: usize = 0,
-        active: bool = false,
+    };
+}
+
+pub const LayoutRegime = enum {
+    canonical,
+    propagated,
+};
+
+pub const LayoutCandidates = struct {
+    values: [2]LayoutRegime = .{ .canonical, .propagated },
+    count: usize = 2,
+};
+
+pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
+    return struct {
+        const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
+        const Analysis = Facts(capacity.max_tensors);
+
+        pub fn analyze(comptime semantic_graph: SemanticGraph, comptime analysis: Analysis) LayoutCandidates {
+            _ = semantic_graph;
+            _ = analysis;
+            return .{};
+        }
+
+        pub fn apply(
+            comptime semantic_graph: SemanticGraph,
+            comptime analysis: Analysis,
+            comptime regime: LayoutRegime,
+        ) SemanticGraph {
+            return switch (regime) {
+                .canonical => semantic_graph,
+                .propagated => propagate(semantic_graph, analysis),
+            };
+        }
+
+        fn propagate(comptime raw: SemanticGraph, comptime analysis: Analysis) SemanticGraph {
+            var graph: SemanticGraph = .init();
+
+            for (0..raw.tensor_ct) |tensor_id| {
+                const inserted = graph.insertTensor(raw.tensors[tensor_id].?);
+                if (inserted != tensor_id) @compileError("optimization changed tensor order");
+            }
+            for (0..raw.sources.len) |source_index| {
+                if (raw.sources[source_index]) |source| graph.insertSource(source_index, source);
+            }
+
+            for (0..raw.node_ct) |node_id| {
+                const node = raw.nodes[node_id].?;
+                const input_ids = raw.input_refs[node.input_start..][0..node.input_count];
+                var result = graph.tensors[node.result].?;
+
+                const planned: Semantic.Op = switch (node.op) {
+                    .view => |view| blk: {
+                        const InputInfos = [node.input_count]SemanticGraph.TensorInfo;
+                        var inputs: InputInfos = undefined;
+                        inline for (0..node.input_count) |input_index| {
+                            inputs[input_index] = graph.tensors[input_ids[input_index].?].?;
+                        }
+                        const inferred = layout_ops.infer(view, &inputs, result.shape, capacity.max_rank);
+                        result.shape = inferred.shape;
+                        result.layout = inferred.layout;
+                        result.storage_tensor = inferred.storage_tensor;
+                        break :blk .{ .view = view };
+                    },
+                    .compute => |compute| blk: {
+                        result.layout = computeLayout(compute, &graph, input_ids, result.shape, analysis);
+                        break :blk .{ .compute = compute };
+                    },
+                };
+                graph.tensors[node.result] = result;
+
+                inline for (0..node.input_count) |input_index| graph.insertRef(input_ids[input_index].?);
+                graph.insertNode(.{
+                    .op = planned,
+                    .input_start = graph.input_ref_ct - node.input_count,
+                    .input_count = node.input_count,
+                    .result = node.result,
+                });
+            }
+
+            for (0..raw.output_ct) |output_index| graph.insertOutput(raw.outputs[output_index].?);
+            return graph;
+        }
+
+        fn computeLayout(
+            comptime op: Semantic.Op.Compute,
+            graph: *SemanticGraph,
+            comptime input_ids: []const ?Tensor.Id,
+            shape: Tensor.Shape(capacity.max_rank),
+            comptime analysis: Analysis,
+        ) Tensor.Layout(capacity.max_rank) {
+            return switch (op) {
+                .matmul => matmul.selectOutputLayout(capacity, graph, input_ids[0].?, input_ids[1].?, shape, analysis),
+                .where => preserveBatchLayout(graph, input_ids[1].?, shape),
+                .contiguous, .pad, .shift, .sum, .mean, .min, .max, .concat => .contiguous(shape),
+                else => preserveBatchLayout(graph, input_ids[0].?, shape),
+            };
+        }
+
+        fn preserveBatchLayout(
+            graph: *const SemanticGraph,
+            comptime input_id: Tensor.Id,
+            output_shape: Tensor.Shape(capacity.max_rank),
+        ) Tensor.Layout(capacity.max_rank) {
+            const input = graph.tensors[input_id].?;
+            if (output_shape.rank == 2 and
+                input.shape.rank == 2 and
+                input.storage_tensor == input_id and
+                input.shape.at(0) == output_shape.at(0) and
+                input.shape.at(1) == output_shape.at(1) and
+                isBatchLayout(input))
+            {
+                return .firstAxisContiguous(output_shape);
+            }
+            return .contiguous(output_shape);
+        }
+
+        fn isBatchLayout(info: Tensor.Info(capacity.max_rank)) bool {
+            return info.shape.rank == 2 and
+                info.layout.offset == 0 and
+                info.layout.strides[0] == 1 and
+                info.layout.strides[1] == @as(isize, @intCast(info.shape.at(0)));
+        }
     };
 }

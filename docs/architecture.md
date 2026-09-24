@@ -8,75 +8,46 @@ pass then removes unused capacity before the graph and model are materialized.
 typed model function
         │
         ▼
-DefinitionBackend ──► completed definition
+DefinitionBuilder ──► completed definition
                             │
                             ▼
-                     CountingBackend
-                     exact capacities
+                      Construction
+                exact capacities + raw graph
                             │
                             ▼
-                       GraphBackend
-                    raw semantic graph
+                  SemanticValidation
                             │
                             ▼
-                    ValidationBackend
-                    early validation
+                     SemanticAnalysis
+                    use facts
+             ┌────────┴────────┐
+             ▼                 ▼
+       FusionAnalysis     LayoutAnalysis
+       candidate regions  candidate regimes
+             └────────┬────────┘
+                      ▼
+              ExecutablePlanning ◄── generic reference
+            combine + lower + schedule
+             bounded PlanCandidate frontier
                             │
                             ▼
-                      GraphAnalysis
-                  uses and fusion edges
+       FinalValidation + LifetimeAnalysis + MemoryPlan
+                  exact candidate costs
                             │
                             ▼
-             SemanticOptimizationBackend
-                 semantic graph rewrites
+                Pareto pruning and selection
                             │
                             ▼
-                    ValidationBackend
-                 semantic revalidation
-                            │
-                            ▼
-                      GraphAnalysis
-               optimized graph use facts
-                            │
-                            ▼
-                     FusionBackend
-                logical fusion regions
-                            │
-                            ▼
-                LayoutPlanningBackend
-                  physical tensor layouts
-                            │
-                            ▼
-                    ValidationBackend
-                   layout validation
-                            │
-                            ▼
-                KernelPlanningBackend
-                 executable kernel plans
-                            │
-                            ▼
-                FinalValidationBackend
-             checked executable graph/views
-                            │
-                            ▼
-                    LifetimeAnalysis
-                 storage-live intervals
-                            │
-                            ▼
-                       MemoryPlan
-                reusable aligned regions
-                            │
-                            ▼
-                     executable Model type
+                    executable Model type
 ```
 
 Calling `definition.model()` performs every stage after definition. Counting
-and compiler-analysis backends are internal implementation details and are not
+and compiler-analysis steps are internal implementation details and are not
 exported as public model-building APIs.
 
 ## Definition
 
-`DefinitionBackend(SourceKey, limits)` is the typed front end. `SourceKey` must
+`DefinitionBuilder(SourceKey, limits)` is the typed front end. `SourceKey` must
 be an enum, giving every input, parameter, or constant a stable compile-time
 index. Its operation methods consume and return one concrete tensor-value type
 whose metadata contains an ID, dtype, and bounded shape.
@@ -101,31 +72,50 @@ Definition limits cover maximum rank, nodes, tensors, input
 references, and outputs. Defaults support small models; larger definitions can
 override individual fields. Exceeding a bound is a compile error.
 
-## Counting, graph construction, and optimization
+## Construction and analysis
 
-The counting backend reads the completed definition and derives exact graph
+The counting step reads the completed definition and derives exact graph
 capacities. In particular, the graph's rank capacity is the largest rank
 actually used, rather than the definition's rank bound. Source storage uses
 direct enum indexing, so its capacity is the highest referenced source index
 plus one.
 
-The graph backend records a raw semantic graph in definition order. Compute
+Graph construction records a raw semantic graph in definition order. Compute
 results initially use canonical dense storage. View operations preserve their
 source storage tensor and derive aliasing shape and strides from that semantic
-layout. Early validation checks operation shapes, dtypes, and view aliases
-before optimization relies on them.
+layout. Semantic validation checks operation shapes, dtypes, and view aliases
+before analysis relies on them.
 
-Graph analysis records tensor use counts, graph outputs, and legal
-single-consumer elementwise fusion edges. Semantic optimization owns
-value-preserving graph rewrites. Fusion selects pointwise map regions,
-producer-to-reduction regions, and compatible sibling reductions. Layout
-planning rebuilds the semantic graph with selected physical layouts and packed
-parameters. Kernel planning converts that result into an executable program
-with concrete, data-only kernel plans. A rank-2 matmul retains the logical
+Semantic analysis records tensor use counts and graph outputs. Fusion analysis
+uses those facts to emit an unfused regime plus discovered pointwise map,
+producer-to-reduction, and compatible sibling-reduction regions when
+available. Layout analysis emits canonical and propagated layout regimes
+without choosing between them. Value-preserving semantic rewrites are not
+implemented yet.
+
+Executable planning owns the decision boundary. It combines fusion and layout
+candidates, realizes each combination as an executable with concrete data-only
+kernel plans, generates schedule variants, and compares completed programs.
+There is no canonical fused/layout/kernel executable before this search. A
+rank-2 matmul retains the logical
 contract `[M, K] * [K, N]` while eligible parameter and constant right-hand
 sides use physical strides `[1, K]`. Batch-oriented layouts propagate through
-compatible operations. Final validation checks layouts and execution plans
-before kernels are instantiated.
+compatible operations in the propagated regime.
+
+Executable planning also preserves an unfused, generic lowering as the legal
+reference. It generates semantic-order, memory-pressure, and critical-path
+schedules for the reference and for every physical combination. Each completed
+candidate receives final validation, lifetime analysis, source planning, and
+memory planning before costing.
+
+A `PlanCandidate` associates an `Executable` and `Schedule` with its origin and
+a structured cost containing estimated runtime work, peak and persistent
+memory, scratch, code size, and conversion cost. The current bounded search
+generates between nine and fifteen candidates, retains at most 16 on a Pareto
+frontier, and applies deterministic tie-breaking. Equal-cost physical choices
+favor analyzed fusion and propagated layouts. The selected candidate becomes
+the model's active executable and receives the final model lifetime and storage
+plan.
 
 Semantic compute nodes use the operation representation in `operations/`.
 Executable compute nodes retain unchanged operations as `direct` semantic
@@ -137,15 +127,16 @@ expressions into one traversal. Reduction regions combine compatible
 pointwise producers and sibling accumulators over a shared domain.
 
 The semantic graph stores fixed arrays of nodes, tensor metadata, flattened
-input references, outputs, and sources. The executable program stores a fixed
+input references, outputs, and sources. An `Executable` stores a fixed
 sequence of invocations with flattened input and output references. An
 invocation may name multiple outputs, allowing sibling reductions to share one
 traversal without representing secondary stores as no-op nodes.
 
-The generated model retains `raw_graph`, `semantic_graph`, and the executable
-`optimized_graph` as compile-time inspection metadata. `build_graph` refers to
-the executable program. A final validated program provides mutable and
-read-only tensor view types
+The generated model retains `raw_graph`, `semantic_graph`, the active
+`executable`, the generic `reference_executable_candidate`, the
+`executable_candidate_frontier`, and `selected_executable_candidate` as
+compile-time inspection metadata. Fusion, layout, and generated executable
+candidate counts are also retained. A final validated program provides mutable and read-only tensor view types
 whose shape, strides, base offset, element count, and layout traits are
 compile-time properties.
 
@@ -208,13 +199,13 @@ with scalar tails. Runtime view state contains storage and any cursor offset
 introduced by runtime-selected subviews; fixed tensor geometry is carried by
 the type.
 
-Matmul kernel planning records a concrete traversal strategy in a data-only
+Executable lowering records a concrete matmul traversal strategy in a data-only
 contraction plan. Generated models dispatch directly to that strategy and do not
 branch over layout metadata at runtime. Direct semantic matmul execution uses
 the general scalar kernel.
 
 Map execution uses a compile-time instruction program built from
-backend-independent elementwise descriptors. Instruction arity and accepted
+pipeline-independent elementwise descriptors. Instruction arity and accepted
 dtypes belong to semantic operations; instruction references and traversal are
 executable-graph details. The instruction sequence is unrolled at compile time,
 so a fused kernel performs one output traversal without runtime opcode dispatch
@@ -222,7 +213,7 @@ or storage for instruction results.
 
 Logical fusion regions and physical kernel plans are separate. Regions contain
 expressions, reduction axes, accumulators, and stores; plans add traversal and
-vectorization schedules after layout selection. Neither representation owns
+vectorization traversal plans after layout selection. Neither representation owns
 execution behavior.
 
 Shape, dtype, rank, axis, and plan compatibility checks belong to semantic and

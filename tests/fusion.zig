@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const ProducerSources = enum(usize) { lhs, rhs };
-const ProducerDefinition = zgc.DefinitionBackend(ProducerSources, .{
+const ProducerDefinition = zgc.DefinitionBuilder(ProducerSources, .{
     .max_rank = 2,
     .max_nodes = 2,
     .max_tensors = 4,
@@ -18,7 +18,7 @@ const ProducerReductionModel = model: {
 };
 
 const SiblingSources = enum(usize) { input, weights };
-const SiblingDefinition = zgc.DefinitionBackend(SiblingSources, .{
+const SiblingDefinition = zgc.DefinitionBuilder(SiblingSources, .{
     .max_rank = 2,
     .max_nodes = 3,
     .max_tensors = 5,
@@ -35,7 +35,7 @@ const SiblingReductionModel = model: {
 };
 
 const TypedPointwiseSources = enum(usize) { input, threshold };
-const TypedPointwiseDefinition = zgc.DefinitionBackend(TypedPointwiseSources, .{
+const TypedPointwiseDefinition = zgc.DefinitionBuilder(TypedPointwiseSources, .{
     .max_rank = 1,
     .max_nodes = 3,
     .max_tensors = 5,
@@ -51,14 +51,35 @@ const TypedPointwiseModel = model: {
     break :model builder.finish().model();
 };
 
+const reduction_vector_width = std.simd.suggestVectorLength(f32) orelse 1;
+const reduction_vector_length = reduction_vector_width + 1;
+const VectorReductionSources = enum(usize) { input, weights };
+const VectorReductionDefinition = zgc.DefinitionBuilder(VectorReductionSources, .{
+    .max_rank = 2,
+    .max_nodes = 2,
+    .max_tensors = 4,
+    .max_input_refs = 3,
+    .max_outputs = 1,
+});
+const VectorReductionModel = model: {
+    var builder = VectorReductionDefinition.init();
+    const input = builder.input(.input, .f32, &.{ 2, reduction_vector_length });
+    const weights = builder.input(.weights, .f32, &.{reduction_vector_length});
+    builder.output(builder.sum(builder.mul(input, weights), .{ .axes = &.{1} }));
+    break :model builder.finish().model();
+};
+
 test "elementwise producer folds into its reduction" {
     const Model = ProducerReductionModel;
 
+    try std.testing.expectEqual(@as(usize, 2), Model.fusion_candidate_count);
+    try std.testing.expectEqual(@as(usize, 15), Model.executable_candidate_count);
+    try std.testing.expectEqual(.discovered, Model.selected_executable_candidate.fusion_regime.?);
     try std.testing.expectEqual(@as(usize, 2), Model.semantic_graph.node_ct);
-    try std.testing.expectEqual(@as(usize, 1), Model.build_graph.node_ct);
-    try std.testing.expect(!Model.build_graph.materialized[2]);
+    try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);
+    try std.testing.expect(!Model.executable.materialized[2]);
     try std.testing.expect(Model.memory_plan.tensor_regions[2] == null);
-    switch (Model.build_graph.nodes[0].?.op.compute.kernel) {
+    switch (Model.executable.nodes[0].?.op.compute.kernel) {
         .reduction => |plan| {
             try std.testing.expectEqual(@as(usize, 1), plan.region.expressions.instructions.len);
             try std.testing.expectEqual(@as(usize, 1), plan.region.accumulators.len);
@@ -77,8 +98,8 @@ test "reductions over a shared domain execute as one multi-output region" {
     const Model = SiblingReductionModel;
 
     try std.testing.expectEqual(@as(usize, 3), Model.semantic_graph.node_ct);
-    try std.testing.expectEqual(@as(usize, 1), Model.build_graph.node_ct);
-    const invocation = Model.build_graph.nodes[0].?;
+    try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);
+    const invocation = Model.executable.nodes[0].?;
     try std.testing.expectEqual(@as(usize, 2), invocation.output_count);
     switch (invocation.op.compute.kernel) {
         .reduction => |plan| {
@@ -97,16 +118,49 @@ test "reductions over a shared domain execute as one multi-output region" {
     try std.testing.expectEqualSlices(f32, &.{ 9, 18 }, model.outputView(1).contiguousSlice().?);
 }
 
+test "fused reductions vectorize a contiguous reduced axis and handle its tail" {
+    const Model = VectorReductionModel;
+    const invocation = Model.executable.nodes[0].?;
+    switch (invocation.op.compute.kernel) {
+        .reduction => |plan| {
+            if (reduction_vector_width > 1) {
+                try std.testing.expectEqual(@as(?u8, 1), plan.traversal_plan.vector_axis);
+                try std.testing.expectEqual(reduction_vector_width, plan.traversal_plan.vector_width);
+            } else {
+                try std.testing.expectEqual(@as(?u8, null), plan.traversal_plan.vector_axis);
+                try std.testing.expectEqual(@as(usize, 1), plan.traversal_plan.vector_width);
+            }
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var input: [2 * reduction_vector_length]f32 = undefined;
+    for (0..reduction_vector_length) |index| {
+        input[index] = 1;
+        input[reduction_vector_length + index] = 2;
+    }
+    var weights: [reduction_vector_length]f32 = @splat(1);
+    var model = Model.init();
+    try model.copyInput(.input, &input);
+    try model.copyInput(.weights, &weights);
+    model.run();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{ reduction_vector_length, 2 * reduction_vector_length },
+        model.outputView(0).contiguousSlice().?,
+    );
+}
+
 test "mixed boolean and numeric pointwise expressions fuse without predicate storage" {
     const Model = TypedPointwiseModel;
 
     try std.testing.expectEqual(@as(usize, 3), Model.semantic_graph.node_ct);
-    try std.testing.expectEqual(@as(usize, 1), Model.build_graph.node_ct);
-    try std.testing.expect(!Model.build_graph.materialized[2]);
-    try std.testing.expect(!Model.build_graph.materialized[3]);
+    try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);
+    try std.testing.expect(!Model.executable.materialized[2]);
+    try std.testing.expect(!Model.executable.materialized[3]);
     try std.testing.expect(Model.memory_plan.tensor_regions[2] == null);
     try std.testing.expect(Model.memory_plan.tensor_regions[3] == null);
-    switch (Model.build_graph.nodes[0].?.op.compute.kernel) {
+    switch (Model.executable.nodes[0].?.op.compute.kernel) {
         .map => |plan| {
             try std.testing.expectEqual(@as(usize, 3), plan.region.expressions.instructions.len);
             try std.testing.expectEqual(zgc.Dtype.bool, plan.region.expressions.instructions[0].dtype);

@@ -3,8 +3,8 @@
 These documents describe the public model-construction flow, compiler pipeline,
 runtime storage, supported operations, constraints, and tooling.
 
-- [Architecture](architecture.md) — definition, raw and optimized graphs,
-  validation, analysis, memory planning, and generated model execution.
+- [Architecture](architecture.md) — definition, semantic graphs, executable
+  candidates, validation, memory planning, and generated model execution.
 - [Design constraints](design-constraints.md) — compile-time specialization,
   source ownership, execution, and memory invariants.
 - [Operation semantics](operations.md) — shape, dtype, broadcasting,

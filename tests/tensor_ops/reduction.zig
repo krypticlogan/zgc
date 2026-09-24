@@ -95,3 +95,41 @@ test "integer min and max reductions use finite dtype identities" {
     try std.testing.expectEqual(@as(i8, -7), min_storage[0]);
     try std.testing.expectEqual(@as(i8, 12), max_storage[0]);
 }
+
+test "mean min and max vectorize contiguous single-axis reductions with tails" {
+    const vector_width = std.simd.suggestVectorLength(f32) orelse 1;
+    const len = vector_width + 1;
+    var input_storage: [len]f32 = undefined;
+    for (&input_storage, 0..) |*value, index| value.* = @floatFromInt(index + 1);
+    input_storage[len - 1] = -5;
+    var mean_storage: [1]f32 = undefined;
+    var min_storage: [1]f32 = undefined;
+    var max_storage: [1]f32 = undefined;
+    const input: zgc.Tensor.ConstView(f32, 1) = .{
+        .storage = &input_storage,
+        .shape = .{len},
+        .strides = .{1},
+        .offset = 0,
+    };
+    const attrs: zgc.Op.Compute.ReductionAttrs = .{ .axes = 1 };
+
+    inline for (.{
+        .{ .op = zgc.Op{ .compute = .{ .mean = attrs } }, .storage = &mean_storage },
+        .{ .op = zgc.Op{ .compute = .{ .min = attrs } }, .storage = &min_storage },
+        .{ .op = zgc.Op{ .compute = .{ .max = attrs } }, .storage = &max_storage },
+    }) |case| {
+        const output: zgc.Tensor.View(f32, 0) = .{
+            .storage = case.storage,
+            .shape = .{},
+            .strides = .{},
+            .offset = 0,
+        };
+        case.op.execute(.{input}, output);
+    }
+
+    const expected_mean = (@as(f32, @floatFromInt((len - 1) * len / 2)) - 5) /
+        @as(f32, @floatFromInt(len));
+    try std.testing.expectApproxEqAbs(expected_mean, mean_storage[0], 0.0001);
+    try std.testing.expectEqual(@as(f32, -5), min_storage[0]);
+    try std.testing.expectEqual(@as(f32, @floatFromInt(len - 1)), max_storage[0]);
+}

@@ -30,7 +30,7 @@ fn DenseBenchmark(
     if (activations.len != layer_count) @compileError("each dense layer requires an activation");
     if (layer_count > weight_keys.len) @compileError("dense benchmark exceeds the source-key capacity");
 
-    const Definition = zgc.DefinitionBackend(Sources, .{
+    const Definition = zgc.DefinitionBuilder(Sources, .{
         .max_rank = 2,
         .max_nodes = layer_count * 3,
         .max_tensors = 1 + layer_count * 5,
@@ -56,7 +56,7 @@ fn DenseBenchmark(
         builder.output(Network.apply(&builder, input));
         break :definition builder.finish();
     };
-    const Model = definition.modelWith(.{ .input = zgc.Source.bound });
+    const Model = definition.modelWith(&.{.{ .source = .input, .binding = zgc.Source.bound }});
     const input_element_count = batch_size * sizes[0];
     const output_element_count = batch_size * sizes[sizes.len - 1];
     const parameters = parameterCount(sizes);

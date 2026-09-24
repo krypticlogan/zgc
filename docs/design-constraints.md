@@ -14,12 +14,14 @@ and execution.
   exact capacities used by graph lowering and memory planning.
 - Shape and operation compatibility errors are reported during compilation when
   their inputs are statically known.
-- Early validation checks the raw semantic graph before analysis. Semantic
-  optimization, fusion, layout planning, and kernel planning are separate
-  compile-time stages. Final validation checks the executable program before
-  model creation.
-- Raw and optimized graphs remain available as compile-time inspection
-  metadata; only the optimized graph drives execution and memory planning.
+- Semantic validation checks the constructed graph before semantic, fusion,
+  and layout analysis. Fusion and layout analysis only advertise legal
+  alternatives; executable planning owns selection and lowering.
+- Executable planning retains an unfused generic reference candidate and a
+  bounded Pareto frontier of scheduled executable alternatives.
+- Raw and semantic graphs, the active executable, the reference candidate,
+  and executable-candidate selection metadata remain available for inspection. The
+  selected candidate supplies the executable used for model generation.
 - The generated model type contains a fixed executable program and memory plan;
   execution does not interpret or allocate graph nodes.
 
@@ -68,8 +70,17 @@ in the model's mutable memory plan.
   rank-2 matmuls and propagate it through compatible dense operations.
 - Matmul parameter and constant right-hand sides retain logical `[K, N]` shape
   while optimization may store them output-major with physical strides `[1, K]`.
-- Generated matmuls carry a compile-time contraction plan selected after layout planning
-  from concrete graph layouts. Semantic matmul nodes contain no kernel plan.
+- Generated matmuls carry a compile-time contraction plan selected during
+  executable planning from a candidate's concrete layouts. Semantic matmul
+  nodes contain no kernel plan.
+- Kernel-local axis ordering, vectorization, accumulator lanes, and unrolling
+  form a `TraversalPlan`; model-level ordering is the executable's node sequence.
+- A candidate `Schedule` is a legal topological ordering of an executable.
+  Initial variants preserve existing order, reduce memory pressure, or favor
+  critical-path work.
+- Every candidate is finalized through lifetime and memory planning before its
+  structured runtime, memory, code-size, scratch, and conversion costs are
+  compared. Dominated candidates are removed from a bounded Pareto frontier.
 - Kernel plans are inert compile-time data. `ExecutableCompute` owns dispatch
   to map, reduction, and contraction kernel families.
 - Executable invocations contain flattened input and output references and may

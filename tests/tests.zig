@@ -6,6 +6,7 @@ test {
     _ = @import("lifetime_analysis.zig");
     _ = @import("memory_reuse.zig");
     _ = @import("fusion.zig");
+    _ = @import("executable_planning.zig");
     _ = @import("tensor_view.zig");
     _ = @import("tensor_ops/tests.zig");
     _ = @import("validation.zig");

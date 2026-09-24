@@ -2,7 +2,7 @@ const Expression = @import("expression.zig").Program;
 const ReductionOperation = @import("../../operations/reduction.zig");
 
 /// Logical computation assigned to one kernel invocation. Regions
-/// describe what is computed together, without choosing a physical schedule.
+/// describe what is computed together, without choosing a traversal plan.
 pub const Region = union(enum) {
     map: Map,
     reduction: Reduction,

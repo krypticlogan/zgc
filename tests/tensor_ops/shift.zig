@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, fill };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
     .max_nodes = 4,
     .max_tensors = 6,
@@ -36,7 +36,7 @@ test "shift maps positive and negative offsets across every boundary mode" {
     try std.testing.expectEqualSlices(f32, &.{ 7, 7, 7, 2, 3, 7 }, model.outputView(3).contiguousSlice().?);
 }
 
-const StridedDefinition = zgc.DefinitionBackend(enum(usize) { input }, .{
+const StridedDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
     .max_rank = 2,
     .max_nodes = 2,
     .max_tensors = 3,
@@ -59,7 +59,7 @@ test "shift reads a strided source view in logical coordinates" {
     try std.testing.expectEqualSlices(f32, &.{ 4, 1, 5, 2, 6, 3 }, model.outputView(0).contiguousSlice().?);
 }
 
-const SingletonDefinition = zgc.DefinitionBackend(enum(usize) { input }, .{
+const SingletonDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
     .max_rank = 1,
     .max_nodes = 1,
     .max_tensors = 2,

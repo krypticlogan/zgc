@@ -13,7 +13,7 @@ The project targets Zig 0.16.0.
 
 ## Capabilities
 
-- Front-facing `DefinitionBackend` with enum-indexed sources.
+- Front-facing `DefinitionBuilder` with enum-indexed sources.
 - `definition.model()` for semantic graph construction, validation, analysis,
   optimization, and executable-model generation.
 - Exact graph capacities derived directly from the model.
@@ -66,7 +66,7 @@ Finally, you may import the zgc module to your own.
 
 ## Defining a model
 
-`DefinitionBackend` is the public model-building surface. Source keys and tensor
+`DefinitionBuilder` is the public model-building surface. Source keys and tensor
 values are concrete types. User code does not run separately against counting
 and graph builders.
 
@@ -75,7 +75,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, weights }; // user-defined source keys
-const Definition = zgc.DefinitionBackend(Sources, .{ .max_rank = 2 });
+const Definition = zgc.DefinitionBuilder(Sources, .{ .max_rank = 2 });
 
 fn define(builder: *Definition) void { // complete graph architecture is defined here
     const input = builder.input(.input, .f32, &.{ 4, 8 });
@@ -114,7 +114,7 @@ construction and memory planning.
 
 ### Neural-network layers
 
-`zgc.nn` composes higher-level layers through `DefinitionBackend`; it does not
+`zgc.nn` composes higher-level layers through `DefinitionBuilder`; it does not
 provide a separate tensor runtime.
 
 ```zig
@@ -224,7 +224,7 @@ https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
 
 | Path | Purpose |
 | --- | --- |
-| `src/zgc/backends/` | Definition, counting, raw graph construction, analysis, optimization, validation, and pipeline orchestration |
+| `src/zgc/pipeline/` | Definition, construction, analysis, scheduling, executable planning, validation, and orchestration |
 | `src/zgc/operations/` | Semantic operation definitions and reusable operation-family descriptors |
 | `src/zgc/optimization/` | Executable plans and optimization-specific representations |
 | `src/zgc/kernels/` | Elementwise, reduction, contraction, layout, and special kernels |

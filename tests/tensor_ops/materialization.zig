@@ -23,7 +23,7 @@ test "copy materializes logical values from a strided view" {
 }
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
     .max_nodes = 2,
     .max_tensors = 3,
@@ -39,7 +39,7 @@ const copy_model = model: {
 };
 
 test "compiled copy materialization owns fresh lowered storage" {
-    const graph = copy_model.build_graph;
+    const graph = copy_model.executable;
     const transposed = graph.tensors[1].?;
     const materialized = graph.tensors[2].?;
 

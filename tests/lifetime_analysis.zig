@@ -3,7 +3,7 @@ const zgc = @import("zgc");
 const models = @import("fixtures/models.zig");
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
     .max_nodes = 6,
     .max_tensors = 7,
@@ -32,7 +32,7 @@ test "alias uses extend the lifetime of root storage" {
         break :blk builder.finish();
     };
     const Model = definition.model();
-    const graph = Model.build_graph;
+    const graph = Model.executable;
     const lifetimes = Model.lifetime_analysis.tensor_lifetimes;
 
     try std.testing.expectEqual(graph.tensors[1].?.storage_tensor, graph.tensors[2].?.storage_tensor);

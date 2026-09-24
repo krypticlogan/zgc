@@ -17,16 +17,17 @@ defer stdout_writer.interface.flush() catch {};
 try zgc.Inspect.writeModel(MyModel, &stdout_writer.interface, .{});
 ```
 
-`writeModel` can include or omit capacity, raw graph, optimized graph, tree,
+`writeModel` can include or omit capacity, raw graph, executable, tree,
 and memory-plan sections through `zgc.Inspect.Sections`. `MyModel.raw_graph`
-contains semantic operations before optimization; `MyModel.optimized_graph`
-and its `build_graph` alias contain executable operations and kernel plans. The
+contains semantic operations before optimization;
+`MyModel.executable` contains executable operations and kernel plans. The
 individual renderers are also
 public:
 
 - `writeCapacity`
 - `writeGraph`
-- `writeGraphStructure`
+- `writeExecutable`
+- `writeExecutableStructure`
 - `writeMemoryPlan`
 - `writeModelMemory`
 
@@ -68,11 +69,11 @@ The executable supports these commands:
 
 ```text
 zgc-inspect all
-zgc-inspect --model 'model-name' graph
+zgc-inspect --model 'model-name' executable
 zgc-inspect summary
 zgc-inspect raw-graph
-zgc-inspect graph
-zgc-inspect graphs
+zgc-inspect executable
+zgc-inspect representations
 zgc-inspect tree
 zgc-inspect memory-plan
 zgc-inspect help

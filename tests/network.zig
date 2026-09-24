@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, w1, b1, w2, b2 };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
     .max_nodes = 6,
     .max_tensors = 11,
@@ -34,7 +34,7 @@ const definition = blk: {
 const Model = definition.model();
 
 test "dense layers build a sequential core graph" {
-    const graph = Model.build_graph;
+    const graph = Model.executable;
 
     try std.testing.expectEqual(@as(usize, 6), Model.semantic_graph.node_ct);
     try std.testing.expectEqual(@as(usize, 5), graph.node_ct);
@@ -75,7 +75,7 @@ test "dense sequential model executes through core kernels" {
 
 test "dense output-input weights create an aliasing transpose" {
     const LayoutSources = enum(usize) { input, weights, bias };
-    const LayoutDefinition = zgc.DefinitionBackend(LayoutSources, .{
+    const LayoutDefinition = zgc.DefinitionBuilder(LayoutSources, .{
         .max_rank = 2,
         .max_nodes = 3,
         .max_tensors = 6,
@@ -95,7 +95,7 @@ test "dense output-input weights create an aliasing transpose" {
         builder.output(layer.apply(&builder, input));
         break :blk builder.finish();
     };
-    const graph = layout_definition.model().build_graph;
+    const graph = layout_definition.model().executable;
 
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, graph.tensors[1].?.shape.slice());
     try std.testing.expectEqualSlices(usize, &.{ 3, 2 }, graph.tensors[2].?.shape.slice());
@@ -119,7 +119,7 @@ test "image helpers declare channel-aware core inputs" {
     );
 
     const ImageSources = enum(usize) { image };
-    const ImageDefinition = zgc.DefinitionBackend(ImageSources, .{
+    const ImageDefinition = zgc.DefinitionBuilder(ImageSources, .{
         .max_rank = 4,
         .max_outputs = 1,
     });

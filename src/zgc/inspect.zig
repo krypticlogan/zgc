@@ -8,7 +8,7 @@ const Writer = std.Io.Writer;
 pub const Sections = struct {
     capacity: bool = true,
     raw_graph: bool = true,
-    graph: bool = true,
+    executable: bool = true,
     structure: bool = true,
     memory_plan: bool = true,
 };
@@ -28,17 +28,17 @@ pub fn writeModel(
         try writer.writeAll("== Raw graph ==\n");
         try writeGraph(writer, Model.raw_graph);
     }
-    if (sections.graph) {
+    if (sections.executable) {
         if (sections.capacity or sections.raw_graph) try writer.writeByte('\n');
-        try writer.writeAll("== Graph ==\n");
-        try writeGraph(writer, Model.build_graph);
+        try writer.writeAll("== Executable ==\n");
+        try writeExecutable(writer, Model.executable);
     }
     if (sections.structure) {
-        if (sections.capacity or sections.raw_graph or sections.graph) try writer.writeByte('\n');
-        try writeGraphStructure(writer, Model.build_graph);
+        if (sections.capacity or sections.raw_graph or sections.executable) try writer.writeByte('\n');
+        try writeExecutableStructure(writer, Model.executable);
     }
     if (sections.memory_plan) {
-        if (sections.capacity or sections.raw_graph or sections.graph or sections.structure) {
+        if (sections.capacity or sections.raw_graph or sections.executable or sections.structure) {
             try writer.writeByte('\n');
         }
         try writer.writeAll("== Memory plan ==\n");
@@ -61,9 +61,18 @@ pub fn writeCapacity(writer: *Writer, capacity: anytype) Writer.Error!void {
 }
 
 pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {
+    return writeRepresentation(writer, graph, "Graph");
+}
+
+pub fn writeExecutable(writer: *Writer, comptime executable: anytype) Writer.Error!void {
+    return writeRepresentation(writer, executable, "Executable");
+}
+
+fn writeRepresentation(writer: *Writer, comptime graph: anytype, comptime label: []const u8) Writer.Error!void {
     try writer.print(
-        "Graph(nodes={d}/{d}, input_refs={d}/{d}, tensors={d}/{d}, outputs={d}/{d})\n",
+        "{s}(nodes={d}/{d}, input_refs={d}/{d}, tensors={d}/{d}, outputs={d}/{d})\n",
         .{
+            label,
             graph.node_ct,
             graph.nodes.len,
             graph.input_ref_ct,
@@ -113,8 +122,8 @@ pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {
     try writer.writeAll("]\n");
 }
 
-pub fn writeGraphStructure(writer: *Writer, comptime graph: anytype) Writer.Error!void {
-    try writer.writeAll("Graph structure:\n");
+pub fn writeExecutableStructure(writer: *Writer, comptime graph: anytype) Writer.Error!void {
+    try writer.writeAll("Executable structure:\n");
     if (graph.output_ct == 0) {
         try writer.writeAll("  (no graph outputs)\n");
         return;
@@ -137,7 +146,7 @@ pub fn writeGraphStructure(writer: *Writer, comptime graph: anytype) Writer.Erro
 }
 
 pub fn writeMemoryPlan(comptime Model: type, writer: *Writer) Writer.Error!void {
-    const graph = Model.build_graph;
+    const graph = Model.executable;
     const plan = Model.memory_plan;
     const SourcePlan = Model.source_plan;
 
@@ -271,12 +280,12 @@ pub fn runCli(
     const command = args[0];
     if (std.mem.eql(u8, command, "summary")) {
         try writeModel(Model, writer, .{
-            .graph = false,
+            .executable = false,
             .raw_graph = false,
             .structure = false,
             .memory_plan = false,
         });
-    } else if (std.mem.eql(u8, command, "graph")) {
+    } else if (std.mem.eql(u8, command, "executable")) {
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
@@ -286,11 +295,11 @@ pub fn runCli(
     } else if (std.mem.eql(u8, command, "raw-graph")) {
         try writeModel(Model, writer, .{
             .capacity = false,
-            .graph = false,
+            .executable = false,
             .structure = false,
             .memory_plan = false,
         });
-    } else if (std.mem.eql(u8, command, "graphs")) {
+    } else if (std.mem.eql(u8, command, "representations")) {
         try writeModel(Model, writer, .{
             .capacity = false,
             .structure = false,
@@ -300,14 +309,14 @@ pub fn runCli(
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
-            .graph = false,
+            .executable = false,
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "memory-plan")) {
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
-            .graph = false,
+            .executable = false,
             .structure = false,
         });
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help")) {
@@ -320,14 +329,14 @@ pub fn runCli(
 
 pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
     try writer.writeAll(
-        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|graph|graphs|tree|memory-plan|help]
+        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|executable|representations|tree|memory-plan|help]
         \\
-        \\  all          capacity, graph, tree, and memory plan (default)
+        \\  all          capacity, graph, executable, tree, and memory plan (default)
         \\  summary      exact graph capacity
         \\  raw-graph    semantic graph before optimization
-        \\  graph        optimized executable graph
-        \\  graphs       raw and optimized graph listings
-        \\  tree         output-oriented graph structure
+        \\  executable   selected executable
+        \\  representations raw semantic graph and selected executable
+        \\  tree         output-oriented executable structure
         \\  memory-plan  owned, bound, and embedded tensor storage
         \\  help         show this message
         \\
@@ -357,7 +366,7 @@ fn isInspectableModel(comptime Candidate: anytype) bool {
     if (@TypeOf(Candidate) != type) return false;
     return @hasDecl(Candidate, "internal_capacity") and
         @hasDecl(Candidate, "raw_graph") and
-        @hasDecl(Candidate, "build_graph") and
+        @hasDecl(Candidate, "executable") and
         @hasDecl(Candidate, "memory_plan") and
         @hasDecl(Candidate, "source_plan");
 }

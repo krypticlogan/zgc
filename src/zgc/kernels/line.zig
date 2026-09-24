@@ -1,4 +1,3 @@
-const std = @import("std");
 const Dtype = @import("../dtype.zig").Dtype;
 const accumulation = @import("accumulation.zig");
 const simd = @import("simd.zig");
@@ -104,7 +103,7 @@ pub fn sum(input: anytype) accumulation.AccumulatorScalar(@TypeOf(input).dtype) 
 pub fn max(input: anytype) accumulation.AccumulatorScalar(@TypeOf(input).dtype) {
     return reduce(input, {}, struct {
         pub fn identity(comptime dtype: Dtype, _: void) accumulation.AccumulatorScalar(dtype) {
-            return -std.math.inf(accumulation.AccumulatorScalar(dtype));
+            return accumulation.identity(dtype, .maximum);
         }
 
         pub fn scalar(
@@ -135,6 +134,44 @@ pub fn max(input: anytype) accumulation.AccumulatorScalar(@TypeOf(input).dtype) 
             accumulator: accumulation.AccumulatorVector(dtype, len),
         ) accumulation.AccumulatorScalar(dtype) {
             return @reduce(.Max, accumulator);
+        }
+    });
+}
+
+pub fn min(input: anytype) accumulation.AccumulatorScalar(@TypeOf(input).dtype) {
+    return reduce(input, {}, struct {
+        pub fn identity(comptime dtype: Dtype, _: void) accumulation.AccumulatorScalar(dtype) {
+            return accumulation.identity(dtype, .minimum);
+        }
+
+        pub fn scalar(
+            comptime dtype: Dtype,
+            accumulator: accumulation.AccumulatorScalar(dtype),
+            value: dtype.Scalar(),
+            _: void,
+        ) accumulation.AccumulatorScalar(dtype) {
+            return @min(accumulator, accumulation.widenScalar(dtype, value));
+        }
+
+        pub fn vector(
+            comptime dtype: Dtype,
+            comptime len: usize,
+            accumulator: accumulation.AccumulatorVector(dtype, len),
+            values: dtype.Vector(len),
+            _: void,
+        ) accumulation.AccumulatorVector(dtype, len) {
+            return @min(
+                accumulator,
+                accumulation.widenVector(dtype, len, values),
+            );
+        }
+
+        pub fn horizontal(
+            comptime dtype: Dtype,
+            comptime len: usize,
+            accumulator: accumulation.AccumulatorVector(dtype, len),
+        ) accumulation.AccumulatorScalar(dtype) {
+            return @reduce(.Min, accumulator);
         }
     });
 }

@@ -9,9 +9,9 @@ pub const KernelPlan = union(enum) {
 
 pub const MapPlan = struct {
     region: Region.Map,
-    schedule: Schedule,
+    traversal_plan: TraversalPlan,
 
-    pub const Schedule = struct {
+    pub const TraversalPlan = struct {
         axis_order: []const u8,
         traversal: Traversal,
         vector_axis: ?u8,
@@ -24,9 +24,9 @@ pub const MapPlan = struct {
 
 pub const ReductionPlan = struct {
     region: Region.Reduction,
-    schedule: Schedule,
+    traversal_plan: TraversalPlan,
 
-    pub const Schedule = struct {
+    pub const TraversalPlan = struct {
         outer_axis_order: []const u8,
         reduction_axis_order: []const u8,
         vector_axis: ?u8,

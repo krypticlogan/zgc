@@ -7,7 +7,7 @@ pub const cell_count = width * height;
 // The world is the model's only external source. Its fixed dimensions make the
 // entire neighborhood geometry available while the graph is being defined.
 const Sources = enum(usize) { world };
-const Definition = zgc.DefinitionBackend(Sources, .{
+const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 4,
     .max_nodes = 12,
     .max_tensors = 18,

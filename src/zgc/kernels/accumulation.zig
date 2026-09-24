@@ -87,11 +87,47 @@ pub fn combine(
     accumulator: AccumulatorScalar(dtype),
     value: dtype.Scalar(),
 ) AccumulatorScalar(dtype) {
-    const widened = widenScalar(dtype, value);
+    return combineAccumulator(dtype, kind, accumulator, widenScalar(dtype, value));
+}
+
+pub fn combineAccumulator(
+    comptime dtype: Dtype,
+    comptime kind: Reduction.Combine,
+    accumulator: AccumulatorScalar(dtype),
+    value: AccumulatorScalar(dtype),
+) AccumulatorScalar(dtype) {
+    return switch (kind) {
+        .sum => accumulator + value,
+        .minimum => @min(accumulator, value),
+        .maximum => @max(accumulator, value),
+    };
+}
+
+pub fn combineVector(
+    comptime dtype: Dtype,
+    comptime len: usize,
+    comptime kind: Reduction.Combine,
+    accumulator: AccumulatorVector(dtype, len),
+    values: dtype.Vector(len),
+) AccumulatorVector(dtype, len) {
+    const widened = widenVector(dtype, len, values);
     return switch (kind) {
         .sum => accumulator + widened,
         .minimum => @min(accumulator, widened),
         .maximum => @max(accumulator, widened),
+    };
+}
+
+pub fn horizontal(
+    comptime dtype: Dtype,
+    comptime len: usize,
+    comptime kind: Reduction.Combine,
+    accumulator: AccumulatorVector(dtype, len),
+) AccumulatorScalar(dtype) {
+    return switch (kind) {
+        .sum => @reduce(.Add, accumulator),
+        .minimum => @reduce(.Min, accumulator),
+        .maximum => @reduce(.Max, accumulator),
     };
 }
 

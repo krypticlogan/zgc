@@ -12,7 +12,7 @@ test "memory plan reuses an expired intermediate region" {
 
 test "persistent outputs retain distinct regions" {
     const Sources = enum(usize) { input };
-    const Definition = zgc.DefinitionBackend(Sources, .{
+    const Definition = zgc.DefinitionBuilder(Sources, .{
         .max_rank = 1,
         .max_nodes = 2,
         .max_tensors = 3,
@@ -37,7 +37,7 @@ test "persistent outputs retain distinct regions" {
 
 test "memory plan splits and coalesces free spans" {
     const Sources = enum(usize) { input };
-    const Definition = zgc.DefinitionBackend(Sources, .{
+    const Definition = zgc.DefinitionBuilder(Sources, .{
         .max_rank = 1,
         .max_nodes = 4,
         .max_tensors = 5,
@@ -67,7 +67,7 @@ test "memory plan splits and coalesces free spans" {
 
 test "memory plan grows when no free span fits" {
     const Sources = enum(usize) { small_input, large_input };
-    const Definition = zgc.DefinitionBackend(Sources, .{
+    const Definition = zgc.DefinitionBuilder(Sources, .{
         .max_rank = 1,
         .max_nodes = 4,
         .max_tensors = 6,
